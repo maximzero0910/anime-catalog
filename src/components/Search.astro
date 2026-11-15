@@ -1,0 +1,131 @@
+<section class="discovery-search" id="search" aria-labelledby="search-title">
+  <div class="search-heading">
+    <p class="eyebrow">ОТКРИЙ СЛЕДВАЩОТО СИ ЗАГЛАВИЕ</p>
+    <h2 id="search-title">Търси в аниме каталога</h2>
+    <p class="muted">Резултатите идват директно от избрания реален източник.</p>
+  </div>
+  <form class="search-form" id="provider-form" role="search">
+    <label class="sr-only" for="provider-query">Заглавие на анимето</label>
+    <span class="search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><circle cx="10.8" cy="10.8" r="6.8" stroke="currentColor" stroke-width="1.8"/><path d="m16 16 5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+    <input id="provider-query" name="q" type="search" autocomplete="off" placeholder="Cowboy Bebop, Frieren…" required />
+    <label class="sr-only" for="provider-name">Доставчик</label>
+    <select id="provider-name" aria-label="Доставчик">
+      <option value="anikoto">Anikoto</option>
+      <option value="animeworld">AnimeWorld</option>
+      <option value="animesaturn">AnimeSaturn</option>
+      <option value="reanime">Re:Anime</option>
+      <option value="gogoanime">Gogoanime</option>
+      <option value="miruro">Miruro</option>
+    </select>
+    <button class="search-submit" type="submit"><span>Търси</span><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <button class="search-clear" id="search-clear" type="button" aria-label="Изчисти търсенето" title="Изчисти">×</button>
+  </form>
+  <p class="search-hint">Натисни Enter за търсене</p>
+  <div class="provider-results" id="provider-results" aria-live="polite" aria-busy="false"></div>
+</section>
+
+<script>
+import { ConsumetError, getEpisodeStreams, getProviderAnime, getSourceKind, searchProvider, type ConsumetSearchResult } from '../lib/consumet';
+
+const form = document.querySelector<HTMLFormElement>('#provider-form');
+const queryInput = document.querySelector<HTMLInputElement>('#provider-query');
+const providerSelect = document.querySelector<HTMLSelectElement>('#provider-name');
+const results = document.querySelector<HTMLDivElement>('#provider-results');
+const clearButton = document.querySelector<HTMLButtonElement>('#search-clear');
+
+function showError(error: unknown): HTMLElement {
+  const box = document.createElement('div');
+  box.className = 'search-message search-error';
+  const heading = document.createElement('strong');
+  const message = document.createElement('p');
+  if (error instanceof ConsumetError) {
+    heading.textContent = error.status === 404 ? 'Маршрутът не е намерен' : 'Търсенето не беше успешно';
+    message.textContent = error.message;
+  } else {
+    heading.textContent = 'Неуспешна заявка';
+    message.textContent = 'Възникна неочаквана грешка при заявката към доставчика.';
+  }
+  box.append(heading, message);
+  return box;
+}
+
+function makeAnimeCard(anime: ConsumetSearchResult, provider: string): HTMLElement {
+  const animeTitle = typeof anime.title === 'string' ? anime.title : anime.title.english ?? anime.title.romaji ?? anime.title.native ?? 'Без заглавие';
+  const poster = anime.image ?? anime.cover;
+  const card = document.createElement('article'); card.className = 'provider-card';
+  if (poster) {
+    const image = document.createElement('img'); image.className = 'provider-poster'; image.src = poster; image.alt = `Постер: ${animeTitle}`; image.loading = 'lazy';
+    card.append(image);
+  } else {
+    const art = document.createElement('div'); art.className = 'provider-poster poster-empty'; art.setAttribute('aria-hidden', 'true'); card.append(art);
+  }
+  const body = document.createElement('div'); body.className = 'provider-card-body';
+  const title = document.createElement('h3'); title.textContent = animeTitle;
+  const meta = document.createElement('p'); meta.className = 'provider-card-meta'; meta.textContent = [anime.releaseDate, anime.type, provider].filter(Boolean).join(' · ');
+  const detailButton = document.createElement('button'); detailButton.className = 'text-button'; detailButton.type = 'button'; detailButton.textContent = 'Покажи епизодите';
+  const details = document.createElement('div'); details.className = 'episode-results';
+  detailButton.addEventListener('click', async () => {
+    detailButton.disabled = true; details.textContent = 'Зареждане на епизодите…';
+    try {
+      const info = await getProviderAnime(provider, anime.id);
+      details.replaceChildren();
+      if (!info.episodes?.length) { details.textContent = 'Този доставчик не върна епизоди.'; return; }
+      for (const episode of info.episodes) {
+        const row = document.createElement('div'); row.className = 'provider-episode';
+        const episodeLabel = `${episode.number}. ${episode.title || 'Епизод'}`;
+        const label = provider === 'anikoto' ? document.createElement('a') : document.createElement('span');
+        if (provider === 'anikoto') {
+          label.className = 'episode-watch-link';
+          const params = new URLSearchParams({ provider, animeId: anime.id, episodeId: episode.id, number: String(episode.number), title: animeTitle });
+          (label as HTMLAnchorElement).href = `/provider-watch?${params}`;
+          label.textContent = `${episodeLabel} · Гледай`;
+        } else label.textContent = episodeLabel;
+        const inspect = document.createElement('button'); inspect.type = 'button'; inspect.className = 'episode-source-button'; inspect.textContent = 'Източници';
+        const sourceInfo = document.createElement('span'); sourceInfo.className = 'source-info';
+        inspect.addEventListener('click', async () => {
+          inspect.disabled = true; sourceInfo.textContent = 'Проверка…';
+          try {
+            const streamData = await getEpisodeStreams(provider, episode.id);
+            const sources = streamData.sources ?? [];
+            sourceInfo.textContent = sources.length ? sources.map(source => `${({ hls: 'HLS', dash: 'DASH', mp4: 'MP4', unsupported: 'Неподдържан формат' } as const)[getSourceKind(source)]}${source.quality ? ` · ${source.quality}` : ''}`).join(', ') : 'Няма налични източници.';
+          } catch (error) {
+            sourceInfo.textContent = error instanceof ConsumetError ? error.message : 'Резолюцията е неуспешна.';
+          } finally { inspect.disabled = false; }
+        });
+        row.append(label, inspect, sourceInfo); details.append(row);
+      }
+    } catch (error) { details.replaceChildren(showError(error)); }
+    finally { detailButton.disabled = false; }
+  });
+  body.append(title, meta, detailButton, details); card.append(body); return card;
+}
+
+form?.addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!queryInput || !providerSelect || !results) return;
+  const query = queryInput.value.trim();
+  if (!query) return;
+  results.setAttribute('aria-busy', 'true'); results.replaceChildren();
+  const loading = document.createElement('p'); loading.className = 'search-message'; loading.textContent = `Търсене на „${query}“…`; results.append(loading);
+  try {
+    const provider = providerSelect.value;
+    const data = await searchProvider(provider, query);
+    results.replaceChildren();
+    if (!data.results?.length) {
+      const empty = document.createElement('p'); empty.className = 'search-message'; empty.textContent = `Няма резултати за „${query}“ при ${provider}.`; results.append(empty); return;
+    }
+    const count = document.createElement('p'); count.className = 'result-count'; count.textContent = `${data.results.length} реални резултата · ${provider}`;
+    const grid = document.createElement('div'); grid.className = 'provider-grid';
+    for (const anime of data.results) grid.append(makeAnimeCard(anime, provider));
+    results.append(count, grid);
+  } catch (error) { results.replaceChildren(showError(error)); }
+  finally { results.setAttribute('aria-busy', 'false'); }
+});
+
+clearButton?.addEventListener('click', () => {
+  if (queryInput) queryInput.value = '';
+  results?.replaceChildren();
+  results?.setAttribute('aria-busy', 'false');
+  queryInput?.focus();
+});
+</script>

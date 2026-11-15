@@ -1,0 +1,14 @@
+---
+import '../styles/global.css';
+import Player from '../components/Player.astro';
+---
+<html lang="bg">
+  <head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><title>Гледай аниме — Anime BG</title></head>
+  <body>
+    <header class="site-header"><div class="shell header-row"><a class="brand" href="/">ANIME BG</a><nav class="site-nav"><a href="/#catalog">Каталог</a><a href="/about">За проекта</a></nav></div></header>
+    <main class="shell watch-main">
+      <div class="watch-heading"><div><p class="eyebrow" data-provider-title>Доставчик</p><h1 data-provider-episode>Епизод</h1></div><a href="/">Към търсенето</a></div>
+      <Player slug="provider" ep={1} anilistId={0} title="Аниме от доставчик" stream="" provider="" providerEpisodeId={null} next={null} previous={null}/>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,427 @@
+{
+  "1": {
+    "anilistId": 1,
+    "slug": "1",
+    "provider": "anikoto",
+    "providerAnimeId": "cowboy-bebop-kb7hu",
+    "providerTitle": "Cowboy Bebop",
+    "episodes": [
+      {
+        "number": 1,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$1",
+        "title": "Asteroid Blues"
+      },
+      {
+        "number": 2,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$2",
+        "title": "Stray Dog Strut"
+      },
+      {
+        "number": 3,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$3",
+        "title": "Honky Tonk Women"
+      },
+      {
+        "number": 4,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$4",
+        "title": "Gateway Shuffle"
+      },
+      {
+        "number": 5,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$5",
+        "title": "Ballad of Fallen Angels"
+      },
+      {
+        "number": 6,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$6",
+        "title": "Sympathy for the Devil"
+      },
+      {
+        "number": 7,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$7",
+        "title": "Heavy Metal Queen"
+      },
+      {
+        "number": 8,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$8",
+        "title": "Waltz for Venus"
+      },
+      {
+        "number": 9,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$9",
+        "title": "Jamming with Edward"
+      },
+      {
+        "number": 10,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$10",
+        "title": "Ganymede Elegy"
+      },
+      {
+        "number": 11,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$11",
+        "title": "Toys in the Attic"
+      },
+      {
+        "number": 12,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$12",
+        "title": "Jupiter Jazz (Part 1)"
+      },
+      {
+        "number": 13,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$13",
+        "title": "Jupiter Jazz (Part 2)"
+      },
+      {
+        "number": 14,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$14",
+        "title": "Bohemian Rhapsody"
+      },
+      {
+        "number": 15,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$15",
+        "title": "My Funny Valentine"
+      },
+      {
+        "number": 16,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$16",
+        "title": "Black Dog Serenade"
+      },
+      {
+        "number": 17,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$17",
+        "title": "Mushroom Samba"
+      },
+      {
+        "number": 18,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$18",
+        "title": "Speak Like a Child"
+      },
+      {
+        "number": 19,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$19",
+        "title": "Wild Horses"
+      },
+      {
+        "number": 20,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$20",
+        "title": "Pierrot le Fou"
+      },
+      {
+        "number": 21,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$21",
+        "title": "Boogie Woogie Feng Shui"
+      },
+      {
+        "number": 22,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$22",
+        "title": "Cowboy Funk"
+      },
+      {
+        "number": 23,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$23",
+        "title": "Brain Scratch"
+      },
+      {
+        "number": 24,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$24",
+        "title": "Hard Luck Woman"
+      },
+      {
+        "number": 25,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$25",
+        "title": "The Real Folk Blues (Part 1)"
+      },
+      {
+        "number": 26,
+        "providerEpisodeId": "cowboy-bebop-kb7hu$episode$26",
+        "title": "The Real Folk Blues (Part 2)"
+      }
+    ],
+    "mappedAt": "2026-11-15T16:31:33.782Z"
+  },
+  "16498": {
+    "anilistId": 16498,
+    "slug": "16498",
+    "provider": "anikoto",
+    "providerAnimeId": "attack-on-titan-bgaoa",
+    "providerTitle": "Attack on Titan",
+    "episodes": [
+      {
+        "number": 1,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$1",
+        "title": "To You Two Thousand Years Later"
+      },
+      {
+        "number": 2,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$2",
+        "title": "That Day"
+      },
+      {
+        "number": 3,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$3",
+        "title": "Shining Dimly in the Midst of Despair"
+      },
+      {
+        "number": 4,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$4",
+        "title": "Night of the Disbanding"
+      },
+      {
+        "number": 5,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$5",
+        "title": "First Battle"
+      },
+      {
+        "number": 6,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$6",
+        "title": "The World She Saw"
+      },
+      {
+        "number": 7,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$7",
+        "title": "The Small Blade"
+      },
+      {
+        "number": 8,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$8",
+        "title": "Hearing the Heartbeat"
+      },
+      {
+        "number": 9,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$9",
+        "title": "The Left Arm's Trace"
+      },
+      {
+        "number": 10,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$10",
+        "title": "Answer"
+      },
+      {
+        "number": 11,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$11",
+        "title": "Idol"
+      },
+      {
+        "number": 12,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$12",
+        "title": "Wound"
+      },
+      {
+        "number": 13,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$13",
+        "title": "Primordial Desire"
+      },
+      {
+        "number": 14,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$14",
+        "title": "Can't Look Into His Eyes"
+      },
+      {
+        "number": 15,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$15",
+        "title": "Special Operations Squad"
+      },
+      {
+        "number": 16,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$16",
+        "title": "What To Do Now"
+      },
+      {
+        "number": 17,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$17",
+        "title": "The Female Titan"
+      },
+      {
+        "number": 18,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$18",
+        "title": "The Forest of Giant Trees"
+      },
+      {
+        "number": 19,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$19",
+        "title": "Bite"
+      },
+      {
+        "number": 20,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$20",
+        "title": "Erwin Smith"
+      },
+      {
+        "number": 21,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$21",
+        "title": "Crushing Blow"
+      },
+      {
+        "number": 22,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$22",
+        "title": "The Defeated"
+      },
+      {
+        "number": 23,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$23",
+        "title": "Smile"
+      },
+      {
+        "number": 24,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$24",
+        "title": "Mercy"
+      },
+      {
+        "number": 25,
+        "providerEpisodeId": "attack-on-titan-bgaoa$episode$25",
+        "title": "Wall"
+      }
+    ],
+    "mappedAt": "2026-11-15T16:31:33.963Z"
+  },
+  "154587": {
+    "anilistId": 154587,
+    "slug": "154587",
+    "provider": "anikoto",
+    "providerAnimeId": "frieren-beyond-journey-s-end-c6fbj",
+    "providerTitle": "Frieren: Beyond Journey's End",
+    "episodes": [
+      {
+        "number": 1,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$1",
+        "title": "The Journey's End"
+      },
+      {
+        "number": 2,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$2",
+        "title": "It Didn't Have to Be Magic..."
+      },
+      {
+        "number": 3,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$3",
+        "title": "Killing Magic"
+      },
+      {
+        "number": 4,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$4",
+        "title": "The Land Where Souls Rest"
+      },
+      {
+        "number": 5,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$5",
+        "title": "Phantoms of the Dead"
+      },
+      {
+        "number": 6,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$6",
+        "title": "The Hero of the Village"
+      },
+      {
+        "number": 7,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$7",
+        "title": "Like a Fairy Tale"
+      },
+      {
+        "number": 8,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$8",
+        "title": "Frieren the Slayer"
+      },
+      {
+        "number": 9,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$9",
+        "title": "Aura the Guillotine"
+      },
+      {
+        "number": 10,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$10",
+        "title": "A Powerful Mage"
+      },
+      {
+        "number": 11,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$11",
+        "title": "Winter in the Northern Lands"
+      },
+      {
+        "number": 12,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$12",
+        "title": "A Real Hero"
+      },
+      {
+        "number": 13,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$13",
+        "title": "Aversion to One's Own Kind"
+      },
+      {
+        "number": 14,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$14",
+        "title": "Privilege of the Young"
+      },
+      {
+        "number": 15,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$15",
+        "title": "Smells Like Trouble"
+      },
+      {
+        "number": 16,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$16",
+        "title": "Long-Lived Friends"
+      },
+      {
+        "number": 17,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$17",
+        "title": "Take Care"
+      },
+      {
+        "number": 18,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$18",
+        "title": "First-Class Mage Exam"
+      },
+      {
+        "number": 19,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$19",
+        "title": "Well-Laid Plans"
+      },
+      {
+        "number": 20,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$20",
+        "title": "Necessary Killing"
+      },
+      {
+        "number": 21,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$21",
+        "title": "The World of Magic"
+      },
+      {
+        "number": 22,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$22",
+        "title": "Future Enemies"
+      },
+      {
+        "number": 23,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$23",
+        "title": "Conquering the Labyrinth"
+      },
+      {
+        "number": 24,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$24",
+        "title": "Perfect Replicas"
+      },
+      {
+        "number": 25,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$25",
+        "title": "A Fatal Vulnerability"
+      },
+      {
+        "number": 26,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$26",
+        "title": "The Height of Magic"
+      },
+      {
+        "number": 27,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$27",
+        "title": "An Era of Humans"
+      },
+      {
+        "number": 28,
+        "providerEpisodeId": "frieren-beyond-journey-s-end-c6fbj$episode$28",
+        "title": "It Would Be Embarrassing When We Met Again"
+      }
+    ],
+    "mappedAt": "2026-11-15T16:31:34.195Z"
+  }
+}

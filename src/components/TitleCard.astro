@@ -1,0 +1,12 @@
+---
+import type { Title } from '../lib/db';
+interface Props { title: Title; }
+const { title } = Astro.props;
+const name = title.title_bg ?? title.english ?? title.romaji ?? title.native ?? `Anime ${title.id}`;
+---
+<article class="card">
+  <a href={`/anime/${title.slug}`} aria-label={`Информация за ${name}`}>
+    <div class="card-art">{title.cover && <img src={title.cover} alt={`Постер на ${name}`} loading="lazy" width="460" height="650" />}</div>
+    <div class="card-body"><h2>{name}</h2><p class="card-meta">{title.year ?? '—'} · {title.format ?? 'Аниме'}{title.score ? <> · <span class="card-score">★ {title.score.toFixed(1)}</span></> : null}</p></div>
+  </a>
+</article>

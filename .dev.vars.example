@@ -1,0 +1,3 @@
+RESOLVER=http://127.0.0.1:3000
+TEST_HLS_URL=https://test-streams.mux.dev/x36xhzz/url_2/193039199_mp4_h264_aac_ld_7.m3u8
+TEST_MP4_URL=https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4

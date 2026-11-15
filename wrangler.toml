@@ -1,0 +1,15 @@
+name = "anime-cdn"
+main = "worker/index.ts"
+compatibility_date = "2026-01-01"
+
+[[routes]]
+pattern = "cdn.example.com/p/*"
+zone_name = "example.com"
+
+[[routes]]
+pattern = "cdn.example.com/s"
+zone_name = "example.com"
+
+[[routes]]
+pattern = "cdn.example.com/api/*"
+zone_name = "example.com"

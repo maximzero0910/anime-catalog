@@ -1,0 +1,45 @@
+---
+import '../styles/global.css';
+import TitleCard from '../components/TitleCard.astro';
+import Search from '../components/Search.astro';
+import { getTitles } from '../lib/db';
+import { readFile } from 'node:fs/promises';
+const titles = getTitles().slice(0, 30);
+const featured = titles[0];
+const descriptions = JSON.parse(await readFile(new URL('../../data/descriptions.json', import.meta.url), 'utf8').catch(() => '{}')) as Record<string, string | null>;
+const featuredTitle = featured?.title_bg ?? featured?.english ?? featured?.romaji ?? featured?.native ?? 'Аниме каталог';
+const featuredDescription = featured ? (descriptions[String(featured.id)] ?? '') : '';
+---
+<html lang="bg">
+  <head>
+    <meta charset="utf-8"/><meta name="viewport" content="width=device-width"/>
+    <meta name="description" content="Откривай аниме заглавия и налични български субтитри."/>
+    <title>Аниме BG — открий аниме</title>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="shell header-row">
+        <a class="brand" href="/" aria-label="Аниме BG начало"><span class="brand-mark" aria-hidden="true">А</span><span>ANIME BG</span></a>
+        <nav class="site-nav" aria-label="Основна навигация"><a href="#catalog">Каталог</a><a href="/about">За проекта</a></nav>
+        <a class="nav-search" href="#search">ТЪРСИ <span aria-hidden="true">↘</span></a>
+      </div>
+    </header>
+    <main class="shell home-main" data-pagefind-body>
+      {featured && <section class="featured" style={featured.banner ? `background-image:url('${featured.banner}')` : featured.cover ? `background-image:url('${featured.cover}')` : ''} aria-labelledby="featured-title">
+        <div class="featured-content">
+          <p class="eyebrow">ИЗБРАНО ОТ КАТАЛОГА</p>
+          <h1 id="featured-title">{featuredTitle}</h1>
+          {featuredDescription && <p class="featured-description">{featuredDescription.replace(/<[^>]*>/g, '').slice(0, 240)}{featuredDescription.length > 240 ? '…' : ''}</p>}
+          <div class="meta-line"><span>{featured.year ?? 'Година неизвестна'}</span><span>{featured.format ?? 'Аниме'}</span>{featured.score && <span>★ {featured.score.toFixed(1)}</span>}</div>
+          <a class="button-primary" href={`/anime/${featured.slug}`}><span>Разгледай заглавието</span><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+        </div>
+      </section>}
+      <Search />
+      <section class="catalog-section" id="catalog" aria-labelledby="catalog-title">
+        <div class="section-heading"><div><p class="section-kicker">ЗАГЛАВИЯ ОТ ANIList</p><h2 id="catalog-title">Каталог</h2></div><span class="section-kicker">{titles.length} заглавия</span></div>
+        <div class="grid">{titles.map(title => <TitleCard title={title} />)}</div>
+      </section>
+    </main>
+    <footer class="footer"><div class="shell"><a href="/about">За проекта</a> · <a href="/dmca">DMCA</a><span> · Български субтитри, когато са налични.</span></div></footer>
+  </body>
+</html>
