@@ -4,3 +4,9 @@ dist/
 .wrangler/
 *.log
 .dev.vars
+.env
+.env.*
+!.env.example
+data/catalog.db-*
+data/subtitles/
+git-diagnostics-*.zip
