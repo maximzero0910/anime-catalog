@@ -55,17 +55,19 @@ async function transport(url: string, init: RequestInit, provider: string): Prom
 
 export async function httpGet(
   url: string,
-  options: { headers?: Record<string, string>; referer?: string; timeoutMs?: number; retries?: number; provider: string },
-): Promise<{ status: number; text: string; headers: Headers; finalUrl: string }> {
-  const { headers: extra = {}, referer, timeoutMs = 12000, retries = 2, provider } = options;
+  options: { headers?: Record<string, string>; referer?: string; timeoutMs?: number; retries?: number; provider: string; returnHttpErrors?: boolean; returnBlockedResponse?: boolean; responseType?: 'text' | 'bytes'; method?: 'GET' | 'HEAD' },
+): Promise<{ status: number; text: string; headers: Headers; finalUrl: string; bytes?: Uint8Array }> {
+  const { headers: extra = {}, referer, timeoutMs = 12000, retries = 2, provider, returnHttpErrors = false, returnBlockedResponse = false, responseType = 'text', method = 'GET' } = options;
   let lastError: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await transport(url, { headers: { 'user-agent': UA, ...(referer ? { referer } : {}), ...extra }, signal: controller.signal }, provider);
-      const text = await response.text();
-      if (response.status === 403) throw new ProviderError('blocked', provider, `${provider}: HTTP 403`);
+      const response = await transport(url, { method, headers: { 'user-agent': UA, ...(referer ? { referer } : {}), ...extra }, signal: controller.signal }, provider);
+      const bytes = responseType === 'bytes' ? new Uint8Array(await response.arrayBuffer()) : undefined;
+      const text = bytes ? new TextDecoder().decode(bytes) : await response.text();
+      if (response.status === 403 && !returnBlockedResponse) throw new ProviderError('blocked', provider, `${provider}: HTTP 403`);
+      if (returnHttpErrors && (response.status === 429 || response.status >= 500)) return { status: response.status, text, headers: response.headers, finalUrl: response.url, ...(bytes ? { bytes } : {}) };
       if (response.status === 429 || response.status >= 500) {
         if (attempt < retries) {
           await new Promise(resolve => setTimeout(resolve, Math.random() * 250 * (2 ** attempt)));
@@ -73,7 +75,7 @@ export async function httpGet(
         }
         throw new ProviderError('network', provider, `${provider}: HTTP ${response.status}`);
       }
-      return { status: response.status, text, headers: response.headers, finalUrl: response.url };
+      return { status: response.status, text, headers: response.headers, finalUrl: response.url, ...(bytes ? { bytes } : {}) };
     } catch (error) {
       if (error instanceof ProviderError && error.kind === 'blocked') throw error;
       if (controller.signal.aborted) throw new ProviderError('timeout', provider, `${provider}: request timed out`);
@@ -89,8 +91,8 @@ export async function httpGet(
   throw new ProviderError('network', provider, `${provider}: ${String(lastError ?? 'request failed')}`);
 }
 
-export async function httpPost(url: string, body: string, options: { headers?: Record<string, string>; referer?: string; timeoutMs?: number; retries?: number; provider: string }): Promise<{ status: number; text: string; headers: Headers; finalUrl: string }> {
-  const { headers: extra = {}, referer, timeoutMs = 12000, retries = 2, provider } = options;
+export async function httpPost(url: string, body: string, options: { headers?: Record<string, string>; referer?: string; timeoutMs?: number; retries?: number; provider: string; returnHttpErrors?: boolean; returnBlockedResponse?: boolean }): Promise<{ status: number; text: string; headers: Headers; finalUrl: string }> {
+  const { headers: extra = {}, referer, timeoutMs = 12000, retries = 2, provider, returnHttpErrors = false, returnBlockedResponse = false } = options;
   let lastError: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
     const controller = new AbortController();
@@ -98,7 +100,8 @@ export async function httpPost(url: string, body: string, options: { headers?: R
     try {
       const response = await transport(url, { method: 'POST', body, headers: { 'user-agent': UA, 'content-type': 'application/json', ...(referer ? { referer } : {}), ...extra }, signal: controller.signal }, provider);
       const text = await response.text();
-      if (response.status === 403) throw new ProviderError('blocked', provider, `${provider}: HTTP 403`);
+      if (response.status === 403 && !returnBlockedResponse) throw new ProviderError('blocked', provider, `${provider}: HTTP 403`);
+      if (returnHttpErrors && (response.status === 429 || response.status >= 500)) return { status: response.status, text, headers: response.headers, finalUrl: response.url };
       if ((response.status === 429 || response.status >= 500) && attempt < retries) {
         await new Promise(resolve => setTimeout(resolve, Math.random() * 250 * (2 ** attempt)));
         continue;

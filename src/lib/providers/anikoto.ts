@@ -40,29 +40,46 @@ function extensionFormat(url: string): 'vtt' | 'ass' | 'srt' {
   return extension === 'ass' || extension === 'srt' ? extension : 'vtt';
 }
 
+export interface AnikotoSearchHit extends SearchHit {
+  image?: string;
+  genres?: string[];
+  format?: string;
+}
+
+export async function searchWithMetadata(query: string): Promise<AnikotoSearchHit[]> {
+  const result = await httpGet(`${BASE}/search?keyword=${encodeURIComponent(query)}`, { provider: id, referer: rootReferer });
+  const hits: AnikotoSearchHit[] = [];
+  const seen = new Set<string>();
+  for (const match of result.text.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)) {
+    const attrs = match[1] ?? '';
+    const classes = attrs.match(/\bclass=["']([^"']+)["']/i)?.[1] ?? '';
+    if (!/(?:^|\s)(?:name|desi-head-title)(?:\s|$)/i.test(classes) && !/\bdata-jp=/i.test(attrs)) continue;
+    const href = attrs.match(/\bhref=["']([^"']*\/watch\/[^"']+)/i)?.[1];
+    const slug = href?.match(/\/watch\/([^/?#]+)/)?.[1];
+    if (!href || !slug || seen.has(slug)) continue;
+    const title = htmlText(match[2] ?? '');
+    if (!title) continue;
+    seen.add(slug);
+
+    const index = match.index ?? 0;
+    const itemStart = result.text.lastIndexOf('<div class="item', index);
+    const nextItem = result.text.indexOf('<div class="item', index + match[0].length);
+    const card = result.text.slice(itemStart >= 0 ? itemStart : index, nextItem >= 0 ? nextItem : index + match[0].length);
+    const imagePath = firstMatch(card, [/<img\b[^>]*\bsrc=["']([^"']+)["']/i]);
+    const genres = [...card.matchAll(/<a\b[^>]*href=["'][^"']*\/genre\/[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi)]
+      .map(genre => htmlText(genre[1] ?? '')).filter(Boolean);
+    const alt = firstMatch(attrs, [/\bdata-jp=["']([^"']+)/i]);
+    const format = firstMatch(card, [/<div\bclass=["']right["'][^>]*>([^<]+)/i]);
+    hits.push({ id: slug, title, ...(alt && alt !== title ? { alt: [alt] } : {}), ...(imagePath ? { image: abs(BASE, imagePath) } : {}), ...(genres.length ? { genres } : {}), ...(format ? { format: htmlText(format) } : {}) });
+  }
+  return hits;
+}
+
 export const anikoto: Provider = {
   id,
   weight: 1.25,
   score: 1,
-  async searchByTitle(q: string): Promise<SearchHit[]> {
-    const result = await httpGet(`${BASE}/search?keyword=${encodeURIComponent(q)}`, { provider: id, referer: rootReferer });
-    const hits: SearchHit[] = [];
-    const seen = new Set<string>();
-    for (const [, attributes, content] of allMatches(result.text, /<a\b([^>]*)>([\s\S]*?)<\/a>/gi)) {
-      const attrs = attributes!;
-      const classes = attrs.match(/\bclass=["']([^"']+)["']/i)?.[1] ?? '';
-      if (!/(?:^|\s)(?:name|desi-head-title)(?:\s|$)/i.test(classes) && !/\bdata-jp=/i.test(attrs)) continue;
-      const href = attrs.match(/\bhref=["']([^"']*\/watch\/[^"']+)/i)?.[1];
-      const slug = href?.match(/\/watch\/([^/?#]+)/)?.[1];
-      if (!href || !slug || seen.has(slug)) continue;
-      const name = htmlText(content!);
-      if (!name) continue;
-      seen.add(slug);
-      const alt = firstMatch(attrs, [/\bdata-jp=["']([^"']+)/i]);
-      hits.push({ id: slug, title: name, ...(alt && alt !== name ? { alt: [alt] } : {}) });
-    }
-    return hits;
-  },
+  async searchByTitle(q: string): Promise<SearchHit[]> { return searchWithMetadata(q); },
   async listEpisodes(seriesId: string): Promise<EpisodeRef[]> {
     const slug = seriesId.replace(/^.*\/watch\//, '').replace(/\/$/, '');
     const seriesUrl = `${BASE}/watch/${encodeURIComponent(slug)}`;
