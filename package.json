@@ -12,6 +12,7 @@
     "provider:sync": "node --import tsx tools/sync-provider-map.ts",
     "test:e2e": "node --import tsx --test tools/e2e.test.ts",
     "test:proxy": "node --import tsx --test src/lib/tests/hls-proxy.test.ts worker/tests/proxy.test.ts",
+    "test:admin": "node --import tsx --test src/lib/tests/admin-auth.test.ts",
     "subtitles:worker": "node --import tsx tools/subtitles-worker.ts",
     "subtitles:index": "node --import tsx tools/subtitles-indexer.ts --watch",
     "subtitles:index:seed": "node --import tsx tools/subtitles-indexer.ts --seed",

@@ -5,6 +5,7 @@ import { getEpisodes, getTitles } from '../../../lib/db';
 import { enqueueEligible } from '../../../lib/subtitles/queue';
 import { addSubtitleTitleAlias, controlJob, deadLetters, getGlossary, jobStats, markSubtitleIndexRejected, markSubtitleIndexVerified, pendingSubtitleMappings, recentJobs, resolveSubtitleMapping, retryFailedJobs, setGlossary, setWorkerConcurrency, setWorkerControl, storedBulgarianCount, subtitleIndexProviderBreakdown, subtitleIndexReviewQueue, subtitleIndexStats, workerConcurrency, workerControl, workerProcessStatus } from '../../../lib/subtitles/storage';
 import { subtitleConfig } from '../../../lib/subtitles/config';
+import { adminAuthorized, adminTokenConfigured } from '../../../lib/admin-auth';
 
 export const prerender = false;
 const execFile = promisify(execFileCallback);
@@ -20,19 +21,16 @@ async function resourceStats(): Promise<Record<string, unknown>> {
   return { cpuCount: cpus().length, loadAverage: (await import('node:os')).loadavg(), memoryTotalBytes: memoryTotal, memoryFreeBytes: memoryFree, memoryUsedPercent: Math.round((memoryTotal - memoryFree) / memoryTotal * 100), gpu };
 }
 
-function localAdminRequest(request: Request): boolean {
-  const url = new URL(request.url);
-  const hostname = url.hostname.toLowerCase();
-  const loopback = hostname === 'localhost' || hostname === '::1' || /^127(?:\.\d{1,3}){3}$/.test(hostname);
-  const origin = request.headers.get('origin');
-  return loopback && (!origin || origin === url.origin);
-}
-function requireAdmin(request: Request): boolean {
-  const expected = process.env.SUBTITLE_ADMIN_TOKEN;
-  return Boolean((expected && request.headers.get('authorization') === `Bearer ${expected}`) || (!expected && localAdminRequest(request)));
+function unauthorizedResponse(): Response {
+  const configured = adminTokenConfigured(process.env.SUBTITLE_ADMIN_TOKEN);
+  return Response.json(
+    { error: configured ? 'unauthorized' : 'Set SUBTITLE_ADMIN_TOKEN to enable administration' },
+    { status: configured ? 401 : 503, headers: { 'cache-control': 'no-store', ...(configured ? { 'WWW-Authenticate': 'Bearer realm="anineko-admin"' } : {}) } },
+  );
 }
 
 export async function GET({ request }: { request: Request }): Promise<Response> {
+  if (!adminAuthorized(request, process.env.SUBTITLE_ADMIN_TOKEN)) return unauthorizedResponse();
   const titles = getTitles();
   const eligible = titles.reduce((sum, title) => sum + getEpisodes(title.id).length, 0);
   const stats = jobStats();
@@ -58,7 +56,7 @@ export async function GET({ request }: { request: Request }): Promise<Response> 
     subtitleIndexProviders: subtitleIndexProviderBreakdown(),
     subtitleIndexReview: subtitleIndexReviewQueue(100),
     needsMapping: pendingSubtitleMappings(100),
-    adminControlsEnabled: Boolean(process.env.SUBTITLE_ADMIN_TOKEN) || localAdminRequest(request),
+    adminControlsEnabled: adminTokenConfigured(process.env.SUBTITLE_ADMIN_TOKEN),
     titles: titles.map(title => ({ id: title.id, name: title.english ?? title.romaji ?? `AniList ${title.id}` })),
     glossary: Number.isSafeInteger(requestedAnime) && requestedAnime > 0 ? getGlossary(requestedAnime) : [],
   };
@@ -66,7 +64,7 @@ export async function GET({ request }: { request: Request }): Promise<Response> 
 }
 
 export async function POST({ request }: { request: Request }): Promise<Response> {
-  if (!requireAdmin(request)) return Response.json({ error: process.env.SUBTITLE_ADMIN_TOKEN ? 'unauthorized' : 'Set SUBTITLE_ADMIN_TOKEN to enable administration, or use the dashboard on loopback' }, { status: process.env.SUBTITLE_ADMIN_TOKEN ? 401 : 503 });
+  if (!adminAuthorized(request, process.env.SUBTITLE_ADMIN_TOKEN)) return unauthorizedResponse();
   let body: Record<string, unknown>;
   try { body = await request.json() as Record<string, unknown>; } catch { return Response.json({ error: 'invalid-json' }, { status: 400 }); }
   const action = body.action;
