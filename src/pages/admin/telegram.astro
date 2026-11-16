@@ -1,7 +1,9 @@
-import '../../styles/global.css';
 ---
-<html lang="bg"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><meta name="robots" content="noindex,nofollow"/><title>Telegram — Anime BG</title></head><body>
-<header class="site-header"><div class="shell header-row"><a class="brand" href="/">ANINEKO</a><nav class="site-nav"><a href="/">Каталог</a><a href="/admin/subtitles">Субтитри</a></nav></div></header>
+import '../../styles/global.css';
+import Brand from '../../components/Brand.astro';
+---
+<html lang="bg"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="icon" href="/anineko-mark.svg" type="image/svg+xml"/><meta name="robots" content="noindex,nofollow"/><title>Telegram — Anineko</title></head><body>
+<header class="site-header"><div class="shell header-row"><Brand /><nav class="site-nav"><a href="/">Каталог</a><a href="/admin/subtitles">Субтитри</a></nav></div></header>
 <main class="shell admin"><p class="eyebrow">ИЗТОЧНИЦИ НА ЕПИЗОДИ</p><h1>Telegram синхронизация</h1><p class="muted">GramJS чете конфигурирания канал. Синхронизацията се изпълнява от отделния worker: <code>npm run telegram:sync -- --watch</code>. Видеофайловете се стриймват директно от Telegram; те не се копират.</p>
 <div class="auth"><label for="token">Административен токен</label><input id="token" type="password" placeholder="TELEGRAM_ADMIN_TOKEN"/><button id="save-token">Запази за сесията</button><button id="sync">Синхронизирай сега</button></div><p id="message" role="status" aria-live="polite"></p>
 <section><h2>Канал и прогрес</h2><div id="status" class="cards"><p>Зареждане…</p></div></section>

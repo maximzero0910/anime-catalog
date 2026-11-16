@@ -2,9 +2,10 @@ import { readFile } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import { getSubtitle } from '../../../../lib/db';
 import { formatTime, parseSubtitle } from '../../../../lib/subtitles/normalize';
-import { enqueueJobOnce, listArtifacts, readBody } from '../../../../lib/subtitles/storage';
+import { enqueueOnDemandJob, getSubtitleHardsub, listArtifacts, readBody } from '../../../../lib/subtitles/storage';
 import { getTitleById, getEpisodes } from '../../../../lib/db';
 import { resolveIndexedBgSubtitle } from '../../../../lib/subtitles/index';
+import { getAniListAnime } from '../../../../lib/anilist';
 
 export const prerender = false;
 
@@ -28,8 +29,20 @@ export async function GET({ params }: { params: { animeId?: string; episode?: st
   if (!Number.isSafeInteger(animeId) || animeId <= 0 || !Number.isSafeInteger(episode) || episode <= 0) return new Response('invalid subtitle request', { status: 400 });
   const title = getTitleById(animeId);
   const episodeRow = title ? getEpisodes(animeId).find(item => item.number === episode) : undefined;
-  if (!title || !episodeRow) return new Response('anime episode not found', { status: 404, headers: { 'cache-control': 'no-store' } });
-  const indexed = title ? await resolveIndexedBgSubtitle(String(animeId), episode, title.romaji || title.english || title.native || String(animeId), episodeRow?.duration == null ? null : episodeRow.duration * 1000) : undefined;
+  let metadataTitle = title?.romaji || title?.english || title?.native || title?.title_bg || title?.slug;
+  let episodeCount = title?.episodes;
+  if (!title || !episodeRow) {
+    try {
+      const metadata = await getAniListAnime(animeId);
+      if (!metadata) return new Response('anime episode not found', { status: 404, headers: { 'cache-control': 'no-store' } });
+      metadataTitle = metadata.title.english || metadata.title.romaji || metadata.title.native || String(animeId);
+      episodeCount = metadata.episodes;
+    } catch {
+      return new Response('anime metadata is temporarily unavailable', { status: 503, headers: { 'cache-control': 'no-store', 'retry-after': '10' } });
+    }
+  }
+  if (episodeCount && episode > episodeCount) return new Response('anime episode not found', { status: 404, headers: { 'cache-control': 'no-store' } });
+  const indexed = await resolveIndexedBgSubtitle(String(animeId), episode, metadataTitle || String(animeId), episodeRow?.duration == null ? null : episodeRow.duration * 1000);
   if (indexed?.track) return new Response(indexed.track.body, { headers: {
     'content-type': 'text/vtt; charset=utf-8', 'cache-control': 'public, max-age=3600',
     'x-subtitle-source': indexed.track.machineTranslated ? 'machine-translated' : 'provider', 'x-subtitle-language': 'bg', 'x-subtitle-score': String(indexed.track.qualityScore),
@@ -52,7 +65,9 @@ export async function GET({ params }: { params: { animeId?: string; episode?: st
     try { return new Response(await readFile(path), { headers: { 'content-type': 'text/vtt; charset=utf-8', 'cache-control': 'public, max-age=86400', 'x-subtitle-source': legacy.translator ? 'machine-translated' : 'provider', 'x-subtitle-language': 'bg' } }); }
     catch { /* Missing legacy artifact falls through to the ordinary unavailable response. */ }
   }
-  const { job } = enqueueJobOnce(animeId, episode);
+  const hardsub = getSubtitleHardsub(animeId, episode);
+  if (hardsub) return Response.json({ status: 'SKIPPED', hardsub: true, source: hardsub.source_id, title: hardsub.source_title }, { headers: { 'cache-control': 'no-store', 'x-subtitle-hardsub': 'bg' } });
+  const job = enqueueOnDemandJob(animeId, episode);
   const active = !['COMPLETED', 'SKIPPED'].includes(job.status) && !(job.status === 'FAILED' && job.available_at === Number.MAX_SAFE_INTEGER);
   if (active) return Response.json({ status: job.status, jobId: job.id, catalogOnly: Boolean(indexed?.catalog) }, { status: 202, headers: {
     'cache-control': 'no-store', 'retry-after': '5',

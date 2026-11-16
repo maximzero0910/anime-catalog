@@ -5,18 +5,12 @@ import { queryAniList } from '../../../../lib/anilist';
 import providerMappings from '../../../../../data/provider-map.json';
 import { getTelegramEpisode } from '../../../../lib/telegram/storage';
 import telegramProvider from '../../../../lib/providers/telegram';
+import { isUsableSubtitleTrackUrl } from '../../../../lib/subtitle-track-url';
+import { getAniListAnime } from '../../../../lib/anilist';
+import { subtitleTitleAliases } from '../../../../lib/subtitles/storage';
+import { resolveProviderEpisode } from '../../../../lib/providers/title-resolver';
 
 export const prerender = false;
-
-function titleMatch(title: string, candidates: Array<{ id: string; title: string; alt?: string[] }>) {
-  const normalize = (value: string) => value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-  const expected = normalize(title);
-  const exact = candidates.find(candidate => [candidate.title, ...(candidate.alt ?? [])].some(name => normalize(name) === expected));
-  if (exact) return exact;
-  return candidates
-    .filter(candidate => [candidate.title, ...(candidate.alt ?? [])].some(name => normalize(name).includes(expected)))
-    .sort((a, b) => Math.abs(normalize(a.title).length - expected.length) - Math.abs(normalize(b.title).length - expected.length))[0];
-}
 
 export async function GET({ params, request }: { params: { anilistId?: string; ep?: string }; request: Request }): Promise<Response> {
   const anilistId = Number(params.anilistId);
@@ -41,6 +35,7 @@ export async function GET({ params, request }: { params: { anilistId?: string; e
   };
   if (telegramFirst) { const source = await resolveTelegram(); if (source) return source; }
   let title = getTitleById(anilistId);
+  let aniList = await getAniListAnime(anilistId).catch(() => null);
   if (!title) {
     try {
       const metadata = await queryAniList<{ Media?: { title?: { romaji?: string | null; english?: string | null; native?: string | null } } }>(
@@ -53,6 +48,7 @@ export async function GET({ params, request }: { params: { anilistId?: string; e
   if (!title) return Response.json({ error: 'title-not-found', anilistId }, { status: 404 });
   const mode = new URL(request.url).searchParams.get('audio') === 'dub' ? 'dub' : 'sub';
   const displayTitle = title.english ?? title.romaji ?? title.native ?? title.title_bg ?? String(anilistId);
+  const sourceTitles = { romaji: aniList?.title.romaji ?? title.romaji ?? '', english: aniList?.title.english ?? title.english ?? '', native: aniList?.title.native ?? title.native ?? '', synonyms: aniList?.synonyms ?? [] };
   const attempts: Array<{ provider: string; reason: string }> = [];
   const mapping = (providerMappings as Record<string, { provider: string; episodes: Array<{ number: number; providerEpisodeId: string }> }>)[String(anilistId)];
   const providers = providerPriority;
@@ -64,11 +60,10 @@ export async function GET({ params, request }: { params: { anilistId?: string; e
       const mappedEpisode = mapping?.provider === provider.id ? mapping.episodes.find(item => item.number === episode) : undefined;
       let ref = mappedEpisode ? { num: episode, id: mappedEpisode.providerEpisodeId } : undefined;
       if (!ref) {
-        const hits = await provider.searchByTitle(displayTitle);
-        const hit = titleMatch(displayTitle, hits);
-        if (!hit) throw new ProviderError('empty', provider.id, 'empty search');
-        const episodes = await provider.listEpisodes(hit.id);
-        ref = episodes.find(item => item.num === episode);
+        const aliases = subtitleTitleAliases(anilistId, provider.id).map(item => item.source_title);
+        const queries = [...new Set([...aliases, displayTitle, title.romaji, title.english, title.native].filter((item): item is string => Boolean(item)))];
+        try { ref = (await resolveProviderEpisode(provider, queries, sourceTitles, aliases, episode)).episode; }
+        catch (error) { throw new ProviderError('empty', provider.id, error instanceof Error ? error.message : 'empty search'); }
       }
       if (!ref) throw new ProviderError('empty', provider.id, 'episode not found');
       const sources = await provider.resolve(ref.id, mode);
@@ -101,7 +96,7 @@ export async function GET({ params, request }: { params: { anilistId?: string; e
       proxy.searchParams.set('r', source.headers.referer ?? 'https://playtube.tv/');
       return Response.json({ url: `${proxy.pathname}${proxy.search}`, type: source.type, quality: source.quality, headers: {}, subtitles: [], audio: source.audio, provider: source.provider, hardsub: 'bg' }, { headers: { 'cache-control': 'no-store' } });
     }
-    return Response.json({ url: source.url, type: source.type, quality: source.quality, headers: source.headers, subtitles: source.subtitles, audio: source.audio, provider: source.provider });
+    return Response.json({ url: source.url, type: source.type, quality: source.quality, headers: source.headers, subtitles: source.subtitles.filter(track => isUsableSubtitleTrackUrl(track.url)), audio: source.audio, provider: source.provider });
   } catch {
     if (!telegramFirst) { const source = await resolveTelegram(); if (source) return source; }
     return Response.json({ error: 'empty', anilistId, episode, attempts }, { status: 502 });

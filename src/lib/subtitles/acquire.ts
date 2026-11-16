@@ -1,104 +1,76 @@
-import { getEpisodes, getTitleById, getTitles } from '../db';
-import { ordered, recordFailure, recordSuccess } from '../providers';
-import { httpGet, ProviderError, type Provider, type SearchHit } from '../providers/types';
-import providerMap from '../../../data/provider-map.json';
+import { getTitleById } from '../db';
+import { httpGet } from '../providers/types';
+import { getAniListAnime } from '../anilist';
+import { subtitleTitleAliases } from './storage';
+import { animeTitleForms, scoreTitleMatch } from './match';
+import { subtitleSources, type Candidate } from './sources';
 import type { SourceLanguage } from './inference';
-import { existingBulgarian } from './storage';
 
-interface Mapping { provider: string; episodes: Array<{ number: number; providerEpisodeId: string }> }
-export interface SubtitleTrack { language: SourceLanguage | 'bg' | string; url: string; format: 'srt' | 'ass' | 'ssa' | 'vtt'; provider: string; headers: Record<string, string>; }
-const mappings = providerMap as Record<string, Mapping>;
-function norm(value: string): string { return value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim(); }
-function matchTitle(title: string, hits: SearchHit[]): SearchHit | undefined {
-  const expected = norm(title);
-  const names = (hit: SearchHit) => [hit.title, ...(hit.alt ?? [])].map(norm);
-  return hits.find(hit => names(hit).includes(expected)) ?? hits.filter(hit => names(hit).some(name => name.includes(expected) || expected.includes(name))).sort((a, b) => Math.abs(norm(a.title).length - expected.length) - Math.abs(norm(b.title).length - expected.length))[0];
+export interface SubtitleTrack {
+  language: SourceLanguage | 'bg' | string;
+  url: string;
+  format: 'srt' | 'ass' | 'ssa' | 'vtt';
+  provider: string;
+  headers: Record<string, string>;
+  attribution?: string;
+  fetch?: Candidate['fetch'];
 }
-function trackFormat(url: string, contentType?: string): SubtitleTrack['format'] {
-  const path = new URL(url).pathname.toLowerCase();
-  const extension = path.split('.').pop();
-  if (extension === 'ass' || extension === 'ssa' || extension === 'srt' || extension === 'vtt') return extension;
-  if (contentType?.includes('subrip')) return 'srt';
-  if (contentType?.includes('ass')) return 'ass';
-  if (contentType?.includes('webvtt')) return 'vtt';
-  return 'vtt';
-}
-function declaredPlaylistTracks(manifest: string, manifestUrl: string, provider: string, headers: Record<string, string>): SubtitleTrack[] {
-  const tracks: SubtitleTrack[] = [];
-  for (const line of manifest.split(/\r?\n/)) {
-    if (!line.startsWith('#EXT-X-MEDIA:') || !/TYPE=SUBTITLES/i.test(line)) continue;
-    const attributes = new Map<string, string>();
-    const re = /([A-Z0-9-]+)=(?:"([^"]*)"|([^,]*))/gi;
-    for (const match of line.slice(line.indexOf(':') + 1).matchAll(re)) attributes.set(match[1]!.toUpperCase(), match[2] ?? match[3] ?? '');
-    const rawLanguage = (attributes.get('LANGUAGE') ?? attributes.get('NAME') ?? '').toLowerCase().split(/[-_]/)[0]!;
-    const language = /^(bg|bul|bulgarian)$/.test(rawLanguage) ? 'bg' : /^(en|eng|english)$/.test(rawLanguage) ? 'en' : /^(ja|jpn|japanese)$/.test(rawLanguage) ? 'ja' : '';
-    const uri = attributes.get('URI');
-    if (language && uri) tracks.push({ language, url: new URL(uri, manifestUrl).href, format: trackFormat(uri), provider, headers });
-  }
-  return tracks;
-}
-export async function findProviderEpisode(animeId: number, episodeNumber: number): Promise<{ provider: Provider; episodeId: string }> {
-  const title = getTitleById(animeId);
-  if (!title) throw new ProviderError('empty', 'subtitle-discovery', `Anime ${animeId} is absent from the catalog`);
-  const mapped = mappings[String(animeId)];
-  const providers = ordered();
-  if (mapped) providers.sort((a, b) => Number(b.id === mapped.provider) - Number(a.id === mapped.provider));
-  for (const provider of providers) {
-    try {
-      const exact = mapped?.provider === provider.id ? mapped.episodes.find(item => item.number === episodeNumber) : undefined;
-      if (exact) return { provider, episodeId: exact.providerEpisodeId };
-      const displayTitle = title.english ?? title.romaji ?? title.native ?? title.title_bg ?? title.slug;
-      const hit = matchTitle(displayTitle, await provider.searchByTitle(displayTitle));
-      if (!hit) { recordFailure(provider.id); continue; }
-      const episode = (await provider.listEpisodes(hit.id)).find(item => item.num === episodeNumber);
-      if (episode) return { provider, episodeId: episode.id };
-      recordFailure(provider.id);
-    } catch (error) {
-      recordFailure(provider.id);
-      console.warn({ provider: provider.id, ep: `${animeId}:${episodeNumber}`, reason: error instanceof Error ? error.message : String(error) });
+export interface SourceCandidate extends Candidate { score: number; }
+
+export async function resolveSubtitleSource(animeId: number, episode: number): Promise<SourceCandidate[]> {
+  const local = getTitleById(animeId);
+  const metadata = await getAniListAnime(animeId).catch(() => null);
+  if (!metadata && !local) throw new Error(`AniList has no metadata for ${animeId}`);
+  const forms = metadata ? animeTitleForms(metadata) : [local!.english, local!.romaji, local!.native, local!.title_bg].filter((value): value is string => Boolean(value));
+  const titles = {
+    romaji: metadata?.title.romaji ?? local?.romaji ?? '', english: metadata?.title.english ?? local?.english ?? '',
+    native: metadata?.title.native ?? local?.native ?? '', synonyms: metadata?.synonyms ?? [],
+  };
+  const output: SourceCandidate[] = [];
+  // DECISION: Subtitle discovery queries the three subtitle registries only. Video provider imports are intentionally absent.
+  for (const sourceId of Object.keys(subtitleSources) as Array<keyof typeof subtitleSources>) {
+    const sourceAliases = subtitleTitleAliases(animeId, sourceId).map(row => row.source_title);
+    const queries = [...new Set([...sourceAliases, ...forms])].filter(Boolean).slice(0, 2);
+    for (const query of queries) {
+      try {
+        const candidates = await subtitleSources[sourceId].searchTitles(query, animeId, episode, titles);
+        for (const candidate of candidates) {
+          const score = scoreTitleMatch(titles, candidate.title, sourceAliases);
+          output.push({ ...candidate, score });
+        }
+      } catch (error) {
+        console.warn({ source: sourceId, animeId, episode, stage: 'subtitle-search', reason: error instanceof Error ? error.message : String(error) });
+      }
     }
   }
-  throw new ProviderError('empty', 'subtitle-discovery', `No provider episode found for ${animeId}:${episodeNumber}`);
+  const unique = new Map<string, SourceCandidate>();
+  for (const candidate of output) {
+    const key = `${candidate.sourceId}:${candidate.episode}:${candidate.url}`;
+    const old = unique.get(key);
+    if (!old || candidate.score > old.score) unique.set(key, candidate);
+  }
+  const order = (candidate: SourceCandidate) => candidate.kind === 'file' && candidate.language === 'bg' ? 0 : candidate.kind === 'file' ? 1 : candidate.kind === 'hardsub' ? 2 : 3;
+  return [...unique.values()].sort((a, b) => order(a) - order(b) || b.score - a.score);
 }
 
 export async function discoverTracks(animeId: number, episodeNumber: number): Promise<SubtitleTrack[]> {
-  if (existingBulgarian(animeId, episodeNumber)) return [{ language: 'bg', url: '', format: 'vtt', provider: 'local', headers: {} }];
-  const { provider, episodeId } = await findProviderEpisode(animeId, episodeNumber);
-  const tracks: SubtitleTrack[] = [];
-  for (const mode of ['sub', 'dub'] as const) {
-    try {
-      const sources = await provider.resolve(episodeId, mode);
-      for (const source of sources) {
-        for (const subtitle of source.subtitles) {
-          if (/\/(?:preview|thumbnails?)(?:\/|\.|$)/i.test(new URL(subtitle.url).pathname)) continue;
-          const rawLanguage = subtitle.lang.toLowerCase().split(/[-_]/)[0] ?? '';
-          const language = /^(bg|bul|bulgarian)$/.test(rawLanguage) ? 'bg' : /^(en|eng|english)$/.test(rawLanguage) ? 'en' : /^(ja|jpn|japanese)$/.test(rawLanguage) ? 'ja' : '';
-          if (!language) continue;
-          tracks.push({ language, url: subtitle.url, format: subtitle.format, provider: provider.id, headers: source.headers });
-        }
-        if (source.type === 'hls') {
-          try {
-            const manifest = await httpGet(source.url, { provider: provider.id, headers: source.headers, timeoutMs: 15000, retries: 0 });
-            tracks.push(...declaredPlaylistTracks(manifest.text, manifest.finalUrl || source.url, provider.id, source.headers));
-          } catch { /* Providers that expose no readable master playlist can still supply their direct track list. */ }
-        }
-      }
-      if (tracks.length) recordSuccess(provider.id);
-    } catch (error) {
-      if (error instanceof ProviderError && error.kind === 'blocked') console.warn({ provider: provider.id, ep: `${animeId}:${episodeNumber}`, reason: error.kind });
-    }
-  }
-  const seen = new Set<string>();
-  return tracks.filter(track => { const key = `${track.language}:${track.url}`; if (seen.has(key)) return false; seen.add(key); return true; });
+  const candidates = await resolveSubtitleSource(animeId, episodeNumber);
+  return candidates.filter(candidate => candidate.kind === 'file' && candidate.url).map(candidate => ({
+    language: candidate.language ?? 'bg', url: candidate.url, format: candidate.format ?? 'srt', provider: candidate.sourceId,
+    headers: {}, attribution: candidate.attribution, fetch: candidate.fetch,
+  }));
 }
 
 export async function downloadTrack(track: SubtitleTrack): Promise<{ track: SubtitleTrack; text: string }> {
+  if (track.fetch) {
+    const result = await track.fetch();
+    return { track: { ...track, format: result.format, language: result.language }, text: result.body };
+  }
   if (!track.url) return { track, text: '' };
   const result = await httpGet(track.url, { provider: track.provider, headers: track.headers, timeoutMs: 30000, retries: 2 });
-  if (result.status < 200 || result.status >= 300 || result.text.trim().length < 20) throw new ProviderError('empty', track.provider, `Subtitle track returned HTTP ${result.status} or an empty body`);
-  const format = trackFormat(track.url, result.headers.get('content-type') ?? undefined);
+  if (result.status < 200 || result.status >= 300 || result.text.trim().length < 20) throw new Error(`${track.provider} subtitle returned HTTP ${result.status} or an empty body`);
+  const extension = new URL(track.url).pathname.toLowerCase().match(/\.(srt|ass|ssa|vtt)$/)?.[1];
+  const contentType = result.headers.get('content-type') ?? '';
+  const format = (extension ?? (contentType.includes('subrip') ? 'srt' : contentType.includes('ass') ? 'ass' : contentType.includes('webvtt') ? 'vtt' : track.format)) as SubtitleTrack['format'];
   return { track: { ...track, format }, text: result.text };
-}
-export function supportedEpisodeCount(animeId?: number): number {
-  return animeId ? getEpisodes(animeId).length : getTitles().reduce((sum, title) => sum + getEpisodes(title.id).length, 0);
 }

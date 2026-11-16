@@ -36,6 +36,30 @@ test('enqueue is deduplicated and interrupted locks recover after restart', () =
   const restarted = new Database(databasePath, { readonly: true });
   assert.equal((restarted.prepare('SELECT status FROM subtitle_jobs WHERE id=?').get(first.id) as { status: string } | undefined)?.status, 'QUEUED');
   restarted.close();
+  storage.updateJob(first.id, 'SKIPPED', { error: 'test complete' });
+});
+
+test('source misses become terminal SKIPPED and aliases plus subtitle offsets persist', () => {
+  const job = storage.enqueueJob(21, 3);
+  storage.skipJobForNoSubtitleSource(job.id);
+  assert.equal(storage.getJob(job.id)?.status, 'SKIPPED');
+  assert.equal(storage.getJob(job.id)?.error, 'no subtitle source');
+  storage.addSubtitleTitleAlias(21, 'playtube', 'Примерно заглавие');
+  assert.equal(storage.subtitleTitleAliases(21, 'playtube')[0]?.source_title, 'Примерно заглавие');
+  storage.setSubtitleOffset(21, 3, 'playtube', 250);
+  assert.equal(storage.getSubtitleOffset(21, 3, 'playtube'), 250);
+  assert.deepEqual(storage.subtitleOffsets(21, 3), { playtube: 250 });
+  storage.saveSubtitleHardsub({ animeId: 21, episode: 3, sourceId: 'playtube', sourceTitle: 'Примерно заглавие', sourceUrl: 'https://playtube.tv/watch/episode' });
+  assert.equal(storage.getSubtitleHardsub(21, 3)?.source_id, 'playtube');
+});
+
+test('fresh on-demand work is claimed before the older bulk-discovery backlog', () => {
+  const bulk = storage.enqueueJob(21, 2);
+  const demand = storage.enqueueOnDemandJob(22, 1);
+  const claimed = storage.claimUndiscoveredJobs(1);
+  assert.equal(claimed[0]?.id, demand.id);
+  storage.updateJob(demand.id, 'SKIPPED', { error: 'test complete' });
+  storage.updateJob(bulk.id, 'SKIPPED', { error: 'test complete' });
 });
 
 test('content-addressed bodies and validated cache entries are reused by config key', async () => {
@@ -56,8 +80,8 @@ test('content-addressed bodies and validated cache entries are reused by config 
 });
 
 test('discovery stages languages and claims English before Japanese sources', () => {
-  const episodeA = storage.enqueueJob(21, 1);
-  const episodeB = storage.enqueueJob(22, 1);
+  const episodeA = storage.enqueueJob(21, 4);
+  const episodeB = storage.enqueueJob(22, 2);
   const discovered = storage.claimUndiscoveredJobs(1);
   assert.equal(discovered.length, 1);
   assert.equal(discovered[0]!.anime_id, 21);
@@ -70,12 +94,12 @@ test('discovery stages languages and claims English before Japanese sources', ()
 });
 
 test('episode queues sort numeric episode IDs numerically', () => {
-  const ten = storage.enqueueJob(22, 10);
-  const two = storage.enqueueJob(22, 2);
+  const ten = storage.enqueueJob(22, 110);
+  const two = storage.enqueueJob(22, 12);
   storage.updateJob(ten.id, 'QUEUED', { sourceLanguage: 'en' });
   storage.updateJob(two.id, 'QUEUED', { sourceLanguage: 'en' });
   const claimed = storage.claimJobs(2);
-  assert.deepEqual(claimed.map(job => job.episode_id), ['2', '10']);
+  assert.deepEqual(claimed.map(job => job.episode_id), ['12', '110']);
 });
 
 test('validated translations never overwrite an existing final manual subtitle', async () => {

@@ -1,14 +1,11 @@
 ---
 import '../styles/global.css';
 import TitleCard from '../components/TitleCard.astro';
+import Brand from '../components/Brand.astro';
 import Search from '../components/Search.astro';
-import { getTitles } from '../lib/db';
-import { readFile } from 'node:fs/promises';
+import { getTitles, getBulgarianCoverage } from '../lib/db';
 const titles = getTitles().slice(0, 30);
-const featured = titles[0];
-const descriptions = JSON.parse(await readFile(new URL('../../data/descriptions.json', import.meta.url), 'utf8').catch(() => '{}')) as Record<string, string | null>;
-const featuredTitle = featured?.title_bg ?? featured?.english ?? featured?.romaji ?? featured?.native ?? 'Аниме каталог';
-const featuredDescription = featured ? (descriptions[String(featured.id)] ?? '') : '';
+const spotlightTitles = titles.filter(title => title.banner || title.cover).slice(0, 6);
 const genreSections = [
   { key: 'romcom', title: 'Rom-com', kicker: 'РОМАНТИКА С КОМЕДИЯ', test: (title: typeof titles[number]) => title.genres.includes('Romance') && title.genres.includes('Comedy') },
   { key: 'shonen', title: 'Шонен', kicker: 'ДЕМОГРАФСКА КАТЕГОРИЯ', test: (title: typeof titles[number]) => title.tags.some(tag => tag.toLowerCase() === 'shounen') },
@@ -19,27 +16,29 @@ const genreSections = [
 <html lang="bg">
   <head>
     <meta charset="utf-8"/><meta name="viewport" content="width=device-width"/>
-    <meta name="description" content="Откривай аниме заглавия и налични български субтитри."/>
-    <title>Аниме BG — открий аниме</title>
+    <meta name="description" content="Anineko — откривай аниме заглавия, видео източници и български субтитри."/>
+    <link rel="icon" href="/anineko-mark.svg" type="image/svg+xml"/>
+    <title>Anineko — открий аниме</title>
   </head>
   <body>
     <header class="site-header">
       <div class="shell header-row">
-        <a class="brand" href="/" aria-label="Аниме BG начало"><span class="brand-mark" aria-hidden="true">А</span><span>ANIME BG</span></a>
+        <Brand />
         <nav class="site-nav" aria-label="Основна навигация"><a href="#catalog">Каталог</a><a href="/about">За проекта</a></nav>
         <a class="nav-search" href="#search">ТЪРСИ <span aria-hidden="true">↘</span></a>
       </div>
     </header>
     <main class="shell home-main" data-pagefind-body>
-      {featured && <section class="featured" style={featured.banner ? `background-image:url('${featured.banner}')` : featured.cover ? `background-image:url('${featured.cover}')` : ''} aria-labelledby="featured-title">
-        <div class="featured-content">
-          <p class="eyebrow">ИЗБРАНО ОТ КАТАЛОГА</p>
-          <h1 id="featured-title">{featuredTitle}</h1>
-          {featuredDescription && <p class="featured-description">{featuredDescription.replace(/<[^>]*>/g, '').slice(0, 240)}{featuredDescription.length > 240 ? '…' : ''}</p>}
-          <div class="meta-line"><span>{featured.year ?? 'Година неизвестна'}</span><span>{featured.format ?? 'Аниме'}</span>{featured.score && <span>★ {featured.score.toFixed(1)}</span>}</div>
-          <a class="button-primary" href={`/anime/${featured.slug}`}><span>Разгледай заглавието</span><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
-        </div>
-      </section>}
+      <section class="spotlight-section" aria-labelledby="spotlight-title">
+        <div class="section-heading"><div><p class="section-kicker">ПОДБРАНО ЗА ТЕБ</p><h1 id="spotlight-title">Намери следващия си свят</h1></div><a class="section-kicker" href="#catalog">Целият каталог ↘</a></div>
+        <div class="spotlight-grid">{spotlightTitles.map((title, index) => {
+          const name = title.title_bg ?? title.english ?? title.romaji ?? title.native ?? `Anime ${title.id}`;
+          const bg = getBulgarianCoverage(title.id);
+          return <a class:list={['spotlight-tile', { 'spotlight-large': index === 0 }]} href={`/anime/${title.slug}`} style={`--tile-image:url('${title.banner ?? title.cover}')`} aria-label={`Разгледай ${name}`}>
+            <span class="spotlight-image" aria-hidden="true"></span><span class="spotlight-copy"><span class="spotlight-kicker">{title.format ?? 'АНИМЕ'}{title.year ? ` · ${title.year}` : ''}</span><span class="spotlight-name">{name}</span><span class="spotlight-meta">{title.score ? `★ ${title.score.toFixed(1)}` : 'Разгледай заглавието'}{bg.available > 0 ? ` · BG ${bg.complete ? 'пълно' : `${bg.available}/${bg.total}`}` : ''}</span></span>
+          </a>;
+        })}</div>
+      </section>
       <Search />
       {genreSections.map(section => <section class="genre-section" aria-labelledby={`genre-${section.key}`}>
         <div class="section-heading"><div><p class="section-kicker">{section.kicker}</p><h2 id={`genre-${section.key}`}>{section.title}</h2></div><a class="section-kicker" href="#catalog" data-select-filter={section.key}>Виж всички</a></div>

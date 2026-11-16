@@ -1,4 +1,4 @@
-# Аниме BG
+# Anineko
 
 Static Astro catalog with Bulgarian subtitles and a local Consumet API integration. AniList IDs and titles live in build-time SQLite; `data/provider-map.json` records the explicit AniList-to-provider anime and episode IDs. Nothing queries SQLite after build. The Worker forwards API calls to Consumet and streams HLS or MP4 in flight; it never stores video segments.
 

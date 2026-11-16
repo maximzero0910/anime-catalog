@@ -1,14 +1,15 @@
 ---
 import '../styles/global.css';
+import Brand from '../components/Brand.astro';
 ---
 <html lang="bg">
   <head>
     <meta charset="utf-8"/><meta name="viewport" content="width=device-width"/>
-    <title>Избери епизод — Anime BG</title>
+    <link rel="icon" href="/anineko-mark.svg" type="image/svg+xml"/><title>Избери епизод — Anineko</title>
   </head>
   <body>
     <header class="site-header">
-      <div class="shell header-row"><a class="brand" href="/">ANIME BG</a><nav class="site-nav"><a href="/#catalog">Каталог</a><a href="/#search">Открий</a></nav></div>
+      <div class="shell header-row"><Brand /><nav class="site-nav"><a href="/#catalog">Каталог</a><a href="/#search">Открий</a></nav></div>
     </header>
     <main class="shell provider-anime-page" data-provider-anime>
       <a class="back-link" href="/#search" data-return-link>← Обратно към откриването</a>

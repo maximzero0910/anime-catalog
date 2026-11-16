@@ -1,4 +1,71 @@
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36';
+import { parseProviderHostRules, providerHostAllowed } from '../src/lib/provider-host-policy';
+const MAX_HLS_ACTIVE = 8;
+const MAX_MANIFEST_BYTES = 1_048_576;
+const MAX_SEGMENT_BYTES = 32 * 1_048_576;
+let activeHls = 0;
+
+function allowedHost(host: string, rules: string[]): boolean {
+  const value = host.toLowerCase().replace(/\.$/, '');
+  if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value) || value.includes(':')) return false;
+  return providerHostAllowed(value, rules);
+}
+
+async function fetchAllowed(target: URL, ref: string, range: string | null, rules: string[], clientSignal: AbortSignal, method: 'GET' | 'HEAD' = 'GET'): Promise<Response> {
+  if (activeHls >= MAX_HLS_ACTIVE) return new Response('proxy overloaded', { status: 503 });
+  activeHls++;
+  let transferred = false;
+  const signal = AbortSignal.any([clientSignal, AbortSignal.timeout(25_000)]);
+  try {
+    let current = target;
+    for (let hop = 0; hop <= 3; hop++) {
+      if (current.protocol !== 'https:' || current.username || current.password || !allowedHost(current.hostname, rules)) return new Response('upstream host is not allowed', { status: 403 });
+      const headers = new Headers({ 'User-Agent': UA, Accept: '*/*' });
+      if (ref) headers.set('Referer', ref);
+      if (range && /^bytes=\d*-\d*(,\d*-\d*)*$/.test(range)) headers.set('Range', range);
+      const response = await fetch(current, { method, headers, redirect: 'manual', signal });
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const location = response.headers.get('Location');
+        if (!location || hop === 3) return new Response('redirect limit exceeded', { status: 502 });
+        try { current = new URL(location, current); } catch { return new Response('invalid redirect URL', { status: 502 }); }
+        continue;
+      }
+      const type = response.headers.get('Content-Type') ?? '';
+      const manifest = type.toLowerCase().includes('mpegurl') || current.pathname.toLowerCase().endsWith('.m3u8');
+      if (method === 'HEAD') return new Response(null, { status: response.status, headers: response.headers });
+      const cap = manifest ? MAX_MANIFEST_BYTES : MAX_SEGMENT_BYTES;
+      const length = Number(response.headers.get('Content-Length'));
+      if (Number.isFinite(length) && length > cap) return new Response('upstream response too large', { status: 413 });
+      if (manifest) {
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        if (bytes.byteLength > cap) return new Response('upstream response too large', { status: 413 });
+        return new Response(bytes, { status: response.status, headers: response.headers });
+      }
+      if (!response.body) return response;
+      let size = 0;
+      const reader = response.body.getReader();
+      let released = false;
+      const release = () => { if (!released) { released = true; activeHls--; } };
+      const body = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          try {
+            const next = await reader.read();
+            if (next.done) { release(); controller.close(); return; }
+            size += next.value.byteLength;
+            if (size > cap) { release(); await reader.cancel(); controller.error(new Error('upstream response too large')); return; }
+            controller.enqueue(next.value);
+          } catch (error) { release(); controller.error(error); }
+        },
+        async cancel(reason) { release(); await reader.cancel(reason); },
+      }, { highWaterMark: 1 });
+      transferred = true;
+      return new Response(body, { status: response.status, headers: response.headers });
+    }
+    return new Response('redirect limit exceeded', { status: 502 });
+  } catch (error) {
+    return new Response(signal.aborted ? 'upstream timeout or client cancellation' : 'upstream fetch failed', { status: signal.aborted ? 504 : 502 });
+  } finally { if (!transferred) activeHls--; }
+}
 
 function cors(response: Response, contentType?: string): Response {
   const headers = new Headers(response.headers);
@@ -42,6 +109,7 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const u = new URL(req.url);
     if (req.method === 'OPTIONS') return new Response(null, { headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,HEAD,OPTIONS', 'Access-Control-Allow-Headers': '*' } });
+    if (req.method !== 'GET' && req.method !== 'HEAD') return new Response('method not allowed', { status: 405, headers: { Allow: 'GET, HEAD, OPTIONS' } });
 
     if (u.pathname === '/api/hls') {
       const target = u.searchParams.get('u');
@@ -49,14 +117,10 @@ export default {
       if (!target) return new Response('missing u', { status: 400 });
       let mediaUrl: URL;
       try { mediaUrl = new URL(target); } catch { return new Response('invalid u', { status: 400 }); }
-      if (!['http:', 'https:'].includes(mediaUrl.protocol)) return new Response('invalid protocol', { status: 400 });
-      const requestHeaders = new Headers({ 'User-Agent': UA });
-      if (ref) requestHeaders.set('Referer', ref);
-      const range = req.headers.get('Range');
-      if (range) requestHeaders.set('Range', range);
-      let upstream: Response;
-      try { upstream = await fetch(mediaUrl, { method: req.method === 'HEAD' ? 'HEAD' : 'GET', headers: requestHeaders }); }
-      catch (error) { console.error(`[HLS] host=${safeHost(target)} status=network-error body=${String(error).slice(0, 240)}`); return new Response('upstream fetch failed', { status: 502 }); }
+      const rules = parseProviderHostRules(env.HLS_ALLOWED_HOSTS);
+      if (!rules.length) return new Response('HLS proxy is not configured', { status: 503 });
+      if (ref) { try { const referer = new URL(ref); if (referer.protocol !== 'https:' || referer.username || referer.password) return new Response('invalid referer', { status: 400 }); } catch { return new Response('invalid referer', { status: 400 }); } }
+      const upstream = await fetchAllowed(mediaUrl, ref, req.headers.get('Range'), rules, req.signal, req.method);
       if (!upstream.ok && upstream.status !== 206) return new Response('upstream media fetch failed', { status: upstream.status });
       const type = upstream.headers.get('Content-Type') ?? '';
       const isManifest = type.toLowerCase().includes('mpegurl') || mediaUrl.pathname.toLowerCase().endsWith('.m3u8');
@@ -108,16 +172,15 @@ export default {
       if (provider === 'test') {
         if (!env.TEST_HLS_URL) return new Response('test stream is not configured', { status: 404 });
         const ref = '';
-        const manifest = await fetch(env.TEST_HLS_URL, { headers: { 'User-Agent': UA } });
+        const rules = parseProviderHostRules(env.HLS_ALLOWED_HOSTS);
+        const manifest = await fetchAllowed(new URL(env.TEST_HLS_URL), ref, null, rules, req.signal, req.method);
         if (!manifest.ok) return new Response('test manifest fetch failed', { status: 502 });
-        return new Response(rewriteManifest(await manifest.text(), new URL(env.TEST_HLS_URL), ref), { headers: { 'Content-Type': 'application/vnd.apple.mpegurl', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' } });
+        return new Response(req.method === 'HEAD' ? null : rewriteManifest(await manifest.text(), new URL(env.TEST_HLS_URL), ref), { headers: { 'Content-Type': 'application/vnd.apple.mpegurl', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' } });
       }
       if (provider === 'test-mp4') {
         if (!env.TEST_MP4_URL) return new Response('MP4 test source is not configured', { status: 404 });
-        const headers = new Headers({ 'User-Agent': UA });
-        const range = req.headers.get('Range');
-        if (range) headers.set('Range', range);
-        const media = await fetch(env.TEST_MP4_URL, { method: req.method === 'HEAD' ? 'HEAD' : 'GET', headers });
+        const rules = parseProviderHostRules(env.HLS_ALLOWED_HOSTS);
+        const media = await fetchAllowed(new URL(env.TEST_MP4_URL), '', req.headers.get('Range'), rules, req.signal, req.method);
         const response = cors(media, media.headers.get('Content-Type') ?? 'video/mp4');
         const responseHeaders = new Headers(response.headers);
         responseHeaders.set('Cache-Control', 'no-store');
@@ -156,7 +219,9 @@ export default {
           if (!headers.has('User-Agent')) headers.set('User-Agent', UA);
           const range = req.headers.get('Range');
           if (range) headers.set('Range', range);
-          const media = await fetch(mp4.url, { method: req.method === 'HEAD' ? 'HEAD' : 'GET', headers });
+          const rules = parseProviderHostRules(env.HLS_ALLOWED_HOSTS);
+          if (!rules.length) return new Response('HLS proxy is not configured', { status: 503 });
+          const media = await fetchAllowed(new URL(mp4.url), ref, req.headers.get('Range'), rules, req.signal);
           console.info(`[Playback] provider=${provider} stage=media-fetch format=mp4 host=${safeHost(mp4.url)} status=${media.status} contentType=${media.headers.get('Content-Type') ?? 'unknown'} range=${media.headers.get('Accept-Ranges') ?? 'unknown'} headerNames=${[...headers.keys()].join(',')}`);
           if (!media.ok && media.status !== 206) {
             const excerpt = (await media.clone().text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 300);
@@ -176,7 +241,9 @@ export default {
       const headers = new Headers(source.headers ?? {});
       if (!headers.has('Referer')) headers.set('Referer', ref);
       if (!headers.has('User-Agent')) headers.set('User-Agent', UA);
-      const manifest = await fetch(source.url, { headers });
+      const rules = parseProviderHostRules(env.HLS_ALLOWED_HOSTS);
+      if (!rules.length) return new Response('HLS proxy is not configured', { status: 503 });
+      const manifest = await fetchAllowed(new URL(source.url), ref, null, rules, req.signal);
       console.info(`[Playback] provider=${provider} stage=media-fetch format=hls host=${safeHost(source.url)} status=${manifest.status} contentType=${manifest.headers.get('Content-Type') ?? 'unknown'} headerNames=${[...headers.keys()].join(',')}`);
       if (!manifest.ok) {
         const excerpt = (await manifest.clone().text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 300);
@@ -197,7 +264,11 @@ export default {
       const target = u.searchParams.get('u');
       const ref = u.searchParams.get('r') ?? '';
       if (!target) return new Response('missing u', { status: 400 });
-      const upstream = await fetch(target, { headers: { Referer: ref, 'User-Agent': UA } });
+      let mediaUrl: URL;
+      try { mediaUrl = new URL(target); } catch { return new Response('invalid u', { status: 400 }); }
+      const rules = parseProviderHostRules(env.HLS_ALLOWED_HOSTS);
+      if (!rules.length) return new Response('HLS proxy is not configured', { status: 503 });
+      const upstream = await fetchAllowed(mediaUrl, ref, req.headers.get('Range'), rules, req.signal);
       const type = upstream.headers.get('Content-Type') ?? '';
       if (type.includes('mpegurl') || new URL(target).pathname.endsWith('.m3u8')) {
         return new Response(rewriteManifest(await upstream.text(), new URL(target), ref), { status: upstream.status, headers: { 'Content-Type': 'application/vnd.apple.mpegurl', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=30' } });
@@ -209,4 +280,4 @@ export default {
   },
 };
 
-interface Env { RESOLVER: string; TEST_HLS_URL?: string; TEST_MP4_URL?: string }
+interface Env { RESOLVER: string; TEST_HLS_URL?: string; TEST_MP4_URL?: string; HLS_ALLOWED_HOSTS?: string }

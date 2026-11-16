@@ -77,7 +77,8 @@ export async function searchWithMetadata(query: string): Promise<AnikotoSearchHi
 
 export const anikoto: Provider = {
   id,
-  weight: 1.25,
+  // DECISION: The resolver returned a verified HLS playlist for the AniList 142853 season title; other providers returned no episode/source in the measured lookup.
+  weight: Number(process.env.ANIKOTO_PROVIDER_PRIORITY ?? 3),
   score: 1,
   async searchByTitle(q: string): Promise<SearchHit[]> { return searchWithMetadata(q); },
   async listEpisodes(seriesId: string): Promise<EpisodeRef[]> {

@@ -30,14 +30,22 @@ async function serve(messageId: number, request: Request, head = false): Promise
   clearTelegramMediaFailure(messageId);
   const readerIterator = iterator[Symbol.asyncIterator]();
   let initial: IteratorResult<Uint8Array> | undefined = first;
+  let cancelled = false;
   const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         const next = initial ?? await readerIterator.next(); initial = undefined;
         if (next.done) controller.close(); else controller.enqueue(next.value);
-      } catch (error) { recordTelegramMediaFailure(messageId, error instanceof Error ? error.message : String(error)); controller.error(error); }
+      } catch (error) {
+        if (cancelled || request.signal.aborted || controller.desiredSize === null) return;
+        recordTelegramMediaFailure(messageId, error instanceof Error ? error.message : String(error));
+        controller.error(error);
+      }
     },
-    async cancel() { await readerIterator.return?.(); },
+    async cancel() {
+      cancelled = true;
+      try { await readerIterator.return?.(); } catch { /* A viewer closing a range request is not a failed Telegram reference. */ }
+    },
   }, { highWaterMark: 1, size: chunk => chunk.byteLength / CHUNK_BYTES });
   return new Response(body, { status: range ? 206 : 200, headers: baseHeaders });
 }

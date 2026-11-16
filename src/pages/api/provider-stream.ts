@@ -1,5 +1,6 @@
 import { getProvider } from '../../lib/providers';
 import { ProviderError, verifyPlayablePlaylist, type AudioMode } from '../../lib/providers/types';
+import { isUsableSubtitleTrackUrl } from '../../lib/subtitle-track-url';
 
 export const prerender = false;
 
@@ -24,7 +25,7 @@ export async function GET({ request }: { request: Request }): Promise<Response> 
         return Response.json({ url: `${proxy.pathname}${proxy.search}`, type: source.type, quality: source.quality, headers: {}, subtitles: [], audio: source.audio, provider: source.provider, hardsub: 'bg' }, { headers: { 'cache-control': 'no-store' } });
       }
       if (source.type === 'hls' && /^https?:\/\//i.test(source.url) && await verifyPlayablePlaylist(source.url, source.headers)) {
-        return Response.json({ url: source.url, type: source.type, quality: source.quality, headers: source.headers, subtitles: source.subtitles, audio: source.audio, provider: source.provider });
+        return Response.json({ url: source.url, type: source.type, quality: source.quality, headers: source.headers, subtitles: source.subtitles.filter(track => isUsableSubtitleTrackUrl(track.url)), audio: source.audio, provider: source.provider });
       }
     }
     throw new ProviderError('empty', provider.id, `${provider.id}: no verified HLS source`);
