@@ -1,10 +1,12 @@
 ---
-interface Props { slug: string; ep: number; anilistId: number; title: string; stream: string; provider: string; providerEpisodeId: string | null; next: string | null; previous: string | null; }
-const { slug, ep, anilistId, title, stream, provider, providerEpisodeId, next, previous } = Astro.props;
+interface Props { slug: string; ep: number; anilistId: number; title: string; stream: string; provider: string; providerEpisodeId: string | null; hardsub?: boolean; next: string | null; previous: string | null; }
+const { slug, ep, anilistId, title, stream, provider, providerEpisodeId, hardsub = false, next, previous } = Astro.props;
 const fallback = `https://anitaku.pe/${encodeURIComponent(slug)}-episode-${ep}`;
 ---
-<div class="player-wrap" data-player-root data-stream={stream} data-fallback={fallback} data-anilist-id={anilistId} data-slug={slug} data-ep={ep} data-provider={provider} data-provider-episode-id={providerEpisodeId ?? ''}>
+<div class="player-wrap" data-player-root data-stream={stream} data-fallback={fallback} data-anilist-id={anilistId} data-slug={slug} data-ep={ep} data-title={title} data-provider={provider} data-provider-episode-id={providerEpisodeId ?? ''} data-hardsub={hardsub ? 'bg' : ''}>
   <div class="player" id="video-frame" aria-label={`${title}, епизод ${ep}`}></div>
+  <p class="hardsub-label" data-hardsub-label hidden></p>
+  <div class="player-loading" data-player-loading role="status" aria-live="polite"><span class="player-spinner" aria-hidden="true"></span><span data-loading-label>Намиране на видео източник…</span></div>
   <button type="button" class="controls-link" data-fallback-toggle hidden>Отвори страницата на доставчика</button>
   <div data-fallback-panel hidden><iframe class="fallback" src={fallback} title={`${title} епизод ${ep}`} allowfullscreen referrerpolicy="no-referrer" loading="lazy"></iframe></div>
   <div class="controls" aria-label="Контроли на плеъра">
@@ -14,7 +16,7 @@ const fallback = `https://anitaku.pe/${encodeURIComponent(slug)}-episode-${ep}`;
     <label>Сила <input data-volume type="range" min="0" max="1" step="0.05" value="1" aria-label="Сила на звука"/></label>
     <button type="button" data-action="fullscreen">Цял екран</button>
     <label>Качество <select data-quality aria-label="Качество"><option value="-1">Автоматично</option></select></label>
-    <button type="button" data-action="subs" aria-pressed="true">Субтитри: БГ</button>
+    <label>Субтитри <select data-subtitle-select aria-label="Избор на субтитри"><option value="auto">Автоматично · БГ → налични</option><option value="off">Изключени</option></select></label>
     {previous && <a class="controls-link" href={previous}>Предишен</a>}
     {next && <a class="controls-link" href={next}>Следващ</a>}
   </div>
@@ -26,25 +28,54 @@ import 'vidstack/player/ui';
 import 'vidstack/player/styles/default/theme.css';
 import 'vidstack/player/styles/default/layouts/video.css';
 
-interface PlayerPrefs { quality: number; subtitles: boolean; }
+interface PlayerPrefs { quality: number; subtitles: boolean; subtitleTrack?: string; }
 const root = document.querySelector<HTMLElement>('[data-player-root]');
 const frame = document.querySelector<HTMLElement>('#video-frame');
 if (root && frame) {
-  if (window.location.pathname === '/provider-watch') {
+  const providerWatch = window.location.pathname === '/provider-watch';
+  if (providerWatch) {
     const params = new URLSearchParams(window.location.search);
     const title = params.get('title') || 'Аниме от доставчик';
     const episode = params.get('number') || '1';
     root.dataset.provider = params.get('provider') || '';
     root.dataset.providerEpisodeId = params.get('episodeId') || '';
     root.dataset.slug = params.get('animeId') || 'provider';
+    root.dataset.title = title;
     root.dataset.ep = episode;
-    root.dataset.anilistId = '0';
+    root.dataset.anilistId = params.get('anilistId') || '0';
     document.title = `${title} — Епизод ${episode}`;
     document.querySelector<HTMLElement>('[data-provider-title]')!.textContent = title;
     document.querySelector<HTMLElement>('[data-provider-episode]')!.textContent = `Епизод ${episode}`;
+    for (const direction of ['previous', 'next'] as const) {
+      const href = params.get(`${direction}Url`);
+      if (!href) continue;
+      const label = direction === 'previous' ? 'Предишен' : 'Следващ';
+      let link = [...document.querySelectorAll<HTMLAnchorElement>('.controls a')].find(anchor => anchor.textContent?.includes(label));
+      if (!link) { link = document.createElement('a'); link.className = 'controls-link'; link.textContent = label; document.querySelector('.controls')?.append(link); }
+      link.href = href;
+    }
   }
   const slug = root.dataset.slug!;
   const ep = root.dataset.ep!;
+  if (!providerWatch && root.dataset.anilistId !== '0') {
+    void fetch(`/api/telegram/catalog/${encodeURIComponent(root.dataset.anilistId!)}`, { cache: 'no-store' }).then(response => response.ok ? response.json() : null).then((data: unknown) => {
+      if (!data || typeof data !== 'object' || !Array.isArray((data as { episodes?: unknown }).episodes)) return;
+      const matches = new Map((data as { episodes: Array<{ number: number; messageId: number }> }).episodes.map(item => [item.number, item]));
+      const title = root.dataset.title || document.title.split(' — ')[0] || slug;
+      const toWatch = (number: number) => {
+        const match = matches.get(number); if (!match) return `/watch/${slug}/${number}`;
+        return `/provider-watch?${new URLSearchParams({ provider: 'telegram', episodeId: String(match.messageId), number: String(number), title, animeId: slug, anilistId: root.dataset.anilistId! })}`;
+      };
+      const current = Number(ep);
+      for (const [direction, target] of [['previous', current - 1], ['next', current + 1]] as const) {
+        if (!matches.has(target)) continue;
+        const label = direction === 'previous' ? 'Предишен' : 'Следващ';
+        let link = [...document.querySelectorAll<HTMLAnchorElement>('.controls a')].find(anchor => anchor.textContent?.includes(label));
+        if (!link) { link = document.createElement('a'); link.className = 'controls-link'; link.textContent = label; document.querySelector('.controls')?.append(link); }
+        link.href = toWatch(target);
+      }
+    }).catch(() => {});
+  }
   const testMode = new URLSearchParams(window.location.search).get('test');
   const testClip = testMode === '1' || testMode === 'mp4';
   let stream = root.dataset.stream!;
@@ -56,76 +87,236 @@ if (root && frame) {
   let prefs = readPrefs();
   let hls: HlsType | undefined;
   let mediaPlayer: import('vidstack/elements').MediaPlayerElement | undefined;
+  let nativeMediaFallback: HTMLVideoElement | undefined;
   let activeTextTrack: import('vidstack').TextTrack | undefined;
+  const externalTextTracks = new Map<string, import('vidstack').TextTrack>();
+  const subtitleChoices = new Map<string, { kind: 'external' | 'hls'; label: string; language: string; url?: string; format?: string; index?: number; machineTranslated?: boolean }>();
+  let providerSubtitles: Array<{ lang: string; url: string; format: string }> = [];
+  let providerReferer = '';
+  let streamProvider = '';
   let sourceKind: 'hls' | 'mp4' | 'dash' | 'unsupported' = 'hls';
   let localTrackLoaded = false;
-  const trackButton = document.querySelector<HTMLButtonElement>('[data-action="subs"]')!;
+  let catalogOnlySubtitle = false;
+  let translationPending = false;
+  let subtitleSelectionVersion = 0;
+  const subtitleSelect = document.querySelector<HTMLSelectElement>('[data-subtitle-select]')!;
   const qualitySelect = document.querySelector<HTMLSelectElement>('[data-quality]')!;
   const savePrefs = () => localStorage.setItem(preferenceKey, JSON.stringify(prefs));
   const fallbackToggle = document.querySelector<HTMLButtonElement>('[data-fallback-toggle]')!;
   const fallbackPanel = document.querySelector<HTMLElement>('[data-fallback-panel]')!;
+  const loading = document.querySelector<HTMLElement>('[data-player-loading]')!;
+  const loadingLabel = loading.querySelector<HTMLElement>('[data-loading-label]')!;
+  const setLoading = (visible: boolean, label = 'Зареждане на видеото…') => {
+    loading.hidden = !visible;
+    loadingLabel.textContent = label;
+  };
   const offerIframeFallback = () => { fallbackToggle.hidden = false; };
   const unsupported = (message: string) => {
+    setLoading(false);
     frame.replaceChildren();
     const note = document.createElement('p'); note.className = 'player-status'; note.textContent = message;
     frame.append(note);
     document.querySelector('.controls')?.remove();
   };
-  const parseVtt = (raw: string): VTTCue[] => {
+  const subtitleName = (language: string, label: string) => language.toLowerCase().startsWith('bg') || /българ/i.test(label) ? 'Български' : label || language || 'Субтитри';
+  const addSubtitleChoice = (key: string, choice: { kind: 'external' | 'hls'; label: string; language: string; url?: string; format?: string; index?: number; machineTranslated?: boolean }) => {
+    if (subtitleChoices.has(key)) return;
+    subtitleChoices.set(key, choice);
+    subtitleSelect.add(new Option(choice.label, key));
+  };
+  const parseSubtitleCues = (raw: string, format: string): VTTCue[] => {
     const cues: VTTCue[] = [];
-    for (const block of raw.replace(/^WEBVTT[^\n]*\n/, '').split(/\n\s*\n/)) {
-      const lines = block.trim().split('\n');
-      const timing = lines.find(line => line.includes('-->'));
-      if (!timing) continue;
-      const [startText, endText] = timing.split('-->').map(value => value.trim().split(/\s+/)[0]);
-      const seconds = (value: string) => value.replace(',', '.').split(':').map(Number).reduce((sum, part) => sum * 60 + part, 0);
-      const cue = new VTTCue(seconds(startText), seconds(endText), lines.slice(lines.indexOf(timing) + 1).join('\n'));
-      cue.line = -2; cues.push(cue);
+    const seconds = (value: string) => value.trim().replace(',', '.').split(':').map(Number).reduce((sum, part) => sum * 60 + part, 0);
+    const add = (start: string, end: string, text: string) => {
+      const from = seconds(start); const to = seconds(end);
+      if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from || !text.trim()) return;
+      const cue = new VTTCue(from, to, text.trim());
+      cue.line = -2; cue.align = 'center'; cue.position = 50; cue.positionAlign = 'center'; cue.size = 90;
+      cues.push(cue);
+    };
+    const normalized = raw.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+    if (format.toLowerCase() === 'ass' || format.toLowerCase() === 'ssa') {
+      let fields = ['Layer', 'Start', 'End', 'Style', 'Name', 'MarginL', 'MarginR', 'MarginV', 'Effect', 'Text'];
+      for (const line of normalized.split('\n')) {
+        if (/^Format:/i.test(line.trim())) { fields = line.slice(line.indexOf(':') + 1).split(',').map(item => item.trim()); continue; }
+        if (!/^Dialogue:/i.test(line)) continue;
+        const parts = line.slice(line.indexOf(':') + 1).trimStart().split(',');
+        const textIndex = fields.findIndex(field => field.toLowerCase() === 'text');
+        const start = parts[fields.findIndex(field => field.toLowerCase() === 'start')];
+        const end = parts[fields.findIndex(field => field.toLowerCase() === 'end')];
+        if (textIndex < 0 || !start || !end || parts.length <= textIndex) continue;
+        const text = parts.slice(textIndex).join(',').replace(/\\N|\\n/g, '\n').replace(/\\h/g, ' ').replace(/\{\\i1\}/gi, '<i>').replace(/\{\\i0\}/gi, '</i>').replace(/\{\\b1\}/gi, '<b>').replace(/\{\\b0\}/gi, '</b>').replace(/\{[^}]*\}/g, '');
+        add(start, end, text);
+      }
+      return cues;
+    }
+    const blocks = normalized.split(/\n[ \t]*\n/);
+    for (const block of blocks) {
+      const lines = block.split('\n');
+      const timingIndex = lines.findIndex(line => /\d{1,2}:\d{2}(?::\d{2})?[.,]\d{1,3}\s*-->\s*\d{1,2}:\d{2}(?::\d{2})?[.,]\d{1,3}/.test(line));
+      if (timingIndex < 0) continue;
+      const timing = lines[timingIndex]!.match(/(\d{1,2}:\d{2}(?::\d{2})?[.,]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}(?::\d{2})?[.,]\d{1,3})/);
+      if (timing) add(timing[1]!, timing[2]!, lines.slice(timingIndex + 1).join('\n'));
     }
     return cues;
   };
-  const setTextTrack = (enabled: boolean) => {
-    if (activeTextTrack) activeTextTrack.mode = enabled ? 'showing' : 'disabled';
-    if (hls && hls.subtitleTracks.length) hls.subtitleDisplay = enabled;
-    trackButton.textContent = enabled ? 'Субтитри: БГ' : 'Субтитри: изкл.';
-    trackButton.setAttribute('aria-pressed', String(enabled));
-    prefs.subtitles = enabled; savePrefs();
+  const installExternalTrack = async (key: string, label: string, language: string, raw: string, format: string, translated = false) => {
+    const existing = externalTextTracks.get(key);
+    if (existing) return existing;
+    const cues = parseSubtitleCues(raw, format);
+    if (!cues.length) throw new Error(`No subtitle cues in ${format} track`);
+    const track = new (await import('vidstack')).TextTrack({ kind: 'subtitles', label, language, default: false });
+    cues.forEach(cue => track.addCue(cue));
+    mediaPlayer!.textTracks.add(track);
+    externalTextTracks.set(key, track);
+    return track;
+  };
+  const applySubtitleChoice = async (requested: string) => {
+    if (!mediaPlayer) return;
+    const selectionVersion = ++subtitleSelectionVersion;
+    if (activeTextTrack) activeTextTrack.mode = 'disabled';
+    for (const track of externalTextTracks.values()) track.mode = 'disabled';
+    activeTextTrack = undefined;
+    if (hls) { hls.subtitleDisplay = false; hls.subtitleTrack = -1; }
+    if (requested === 'off') { prefs.subtitles = false; prefs.subtitleTrack = 'off'; savePrefs(); return; }
+    const selected = requested === 'auto' || !subtitleChoices.has(requested)
+      ? [...subtitleChoices.entries()].sort((a, b) => {
+          const rank = (choice: typeof a[1]) => choice.language.toLowerCase().startsWith('bg') || /българ/i.test(choice.label) ? 0 : choice.language.toLowerCase().startsWith('en') || /english/i.test(choice.label) ? 1 : 2;
+          return rank(a[1]) - rank(b[1]);
+        })[0]
+      : [requested, subtitleChoices.get(requested)!] as const;
+    if (!selected) { prefs.subtitles = true; prefs.subtitleTrack = 'auto'; savePrefs(); return; }
+    const [key, choice] = selected;
+    try {
+      if (choice.kind === 'hls' && hls && choice.index != null) {
+        hls.subtitleTrack = choice.index; hls.subtitleDisplay = true;
+      } else if (choice.kind === 'external') {
+        let track = externalTextTracks.get(key);
+        if (!track && choice.url && choice.format) {
+          const response = await fetch(`/api/hls?${new URLSearchParams({ u: choice.url, r: providerReferer })}`, { signal: AbortSignal.timeout(12_000) });
+          if (!response.ok) throw new Error(`Subtitle returned HTTP ${response.status}`);
+          const body = await response.text();
+          if (selectionVersion !== subtitleSelectionVersion) return;
+          track = await installExternalTrack(key, choice.label, choice.language, body, choice.format, Boolean(choice.machineTranslated));
+        }
+        if (!track) throw new Error(`Subtitle track '${choice.label}' has no loadable source`);
+        if (selectionVersion !== subtitleSelectionVersion) return;
+        activeTextTrack = track; track.mode = 'showing';
+      }
+      prefs.subtitles = true; prefs.subtitleTrack = requested === 'auto' ? 'auto' : key; savePrefs();
+    } catch (error) {
+      if (selectionVersion !== subtitleSelectionVersion) return;
+      subtitleSelect.value = 'auto';
+      prefs.subtitleTrack = 'auto'; savePrefs();
+      console.warn('Subtitle track could not be loaded', error);
+      const fallback = [...subtitleChoices.keys()].find(value => value !== key);
+      if (fallback) await applySubtitleChoice(fallback);
+    }
   };
   const loadLocalTrack = async () => {
     if (!mediaPlayer || localTrackLoaded) return;
     localTrackLoaded = true;
     try {
-      const response = await fetch(`/subs/${encodeURIComponent(slug)}/${ep}.vtt`);
-      if (!response.ok) throw new Error('Subtitle file unavailable');
-      const track = new (await import('vidstack')).TextTrack({ kind: 'subtitles', label: 'Български', language: 'bg', default: true });
-      for (const cue of parseVtt(await response.text())) track.addCue(cue);
-      mediaPlayer.textTracks.add(track);
+      const animeId = root.dataset.anilistId;
+      const apiUrl = animeId && animeId !== '0' ? `/api/subtitles/${encodeURIComponent(animeId)}/${encodeURIComponent(ep)}` : '';
+      let response = apiUrl ? await fetch(apiUrl, { cache: 'no-store' }) : new Response('', { status: 404 });
+      catalogOnlySubtitle = response.headers.get('x-subtitle-catalog-only') === 'true';
+      if (response.status === 202) {
+        translationPending = true;
+        subtitleSelect.querySelector('option[value="bg-unavailable"]')?.remove();
+        const pending = new Option('Български · превежда се', 'bg-pending');
+        pending.disabled = true;
+        subtitleSelect.add(pending);
+        // Translation runs in the persistent worker; polling never blocks playback.
+        for (let attempt = 0; attempt < 360 && response.status === 202; attempt++) {
+          const seconds = Number(response.headers.get('retry-after')) || 5;
+          await new Promise(resolve => window.setTimeout(resolve, Math.min(10, Math.max(2, seconds)) * 1000));
+          response = await fetch(apiUrl, { cache: 'no-store' });
+          catalogOnlySubtitle ||= response.headers.get('x-subtitle-catalog-only') === 'true';
+          if (response.status === 202) {
+            const state = (await response.clone().json().catch(() => null)) as { status?: string } | null;
+            pending.textContent = state?.status ? `Български · ${state.status === 'TRANSLATING' ? 'превежда се' : 'подготвя се'}` : 'Български · подготвя се';
+          }
+        }
+        if (response.status === 202) throw new Error('Translation is still queued; it will be available after the worker finishes.');
+      }
+      if (!response.ok) response = await fetch(`/subs/${encodeURIComponent(slug)}/${ep}.vtt`);
+      if (!response.ok) return;
+      translationPending = false;
+      subtitleSelect.querySelector('option[value="bg-pending"]')?.remove();
+      const translated = response.headers.get('x-subtitle-source') === 'machine-translated';
+      const label = translated ? 'Български · машинен превод' : 'Български';
+      const raw = await response.text();
+      if (!raw.trimStart().startsWith('WEBVTT')) return;
+      addSubtitleChoice('local-bg', { kind: 'external', label, language: 'bg', format: 'vtt' });
+      const track = await installExternalTrack('local-bg', label, 'bg', raw, 'vtt', translated);
       activeTextTrack = track;
-      track.mode = prefs.subtitles ? 'showing' : 'disabled';
-      trackButton.textContent = prefs.subtitles ? 'Субтитри: БГ' : 'Субтитри: изкл.';
-      trackButton.setAttribute('aria-pressed', String(prefs.subtitles));
-      savePrefs();
-    } catch { prefs.subtitles = false; }
+      const choice = subtitleSelect.querySelector<HTMLOptionElement>('option[value="local-bg"]');
+      if (choice) choice.textContent = label;
+    } catch (error) {
+      subtitleChoices.delete('local-bg');
+      subtitleSelect.querySelector('option[value="local-bg"]')?.remove();
+      console.info('No indexed Bulgarian subtitle for this episode yet', error);
+    }
   };
   const onManifestParsed = async () => {
     if (!mediaPlayer || !hls) return;
+    setLoading(false);
     qualitySelect.replaceChildren(new Option('Автоматично', '-1'));
     hls.levels.forEach((level, index) => qualitySelect.add(new Option(`${level.height ? `${level.height}p` : `Ниво ${index + 1}`}`, String(index))));
     if (prefs.quality >= hls.levels.length) prefs.quality = -1;
     hls.currentLevel = prefs.quality;
     qualitySelect.value = String(prefs.quality);
-    if (hls.levels.length > 1) {
-      const subtitle = hls.subtitleTracks.findIndex(track => track.lang?.toLowerCase().startsWith('bg') || track.name?.toLowerCase().includes('българ'));
-      if (subtitle >= 0) hls.subtitleTrack = subtitle;
-      activeTextTrack = mediaPlayer.textTracks.getByKind('subtitles').find(track => track.language?.toLowerCase().startsWith('bg') || track.label?.toLowerCase().includes('българ'));
-      if (activeTextTrack) activeTextTrack.mode = prefs.subtitles ? 'showing' : 'disabled';
-      hls.subtitleDisplay = prefs.subtitles;
-    } else {
-      await loadLocalTrack();
+    await loadLocalTrack();
+    providerSubtitles.forEach((track, index) => {
+      if (!track.url || !/^https?:\/\//i.test(track.url) || !['vtt', 'srt', 'ass', 'ssa'].includes(track.format.toLowerCase())) return;
+      const language = /^(bg|bul|българ)/i.test(track.lang) ? 'bg' : /^(en|eng|english)/i.test(track.lang) ? 'en' : track.lang;
+      const sourceLabel = streamProvider ? `${track.lang} · ${streamProvider}` : track.lang;
+      addSubtitleChoice(`provider-${index}`, { kind: 'external', label: subtitleName(language, sourceLabel), language, url: track.url, format: track.format.toLowerCase() });
+    });
+    hls.subtitleTracks.forEach((track, index) => {
+      const language = track.lang || 'und';
+      const name = track.name || language;
+      addSubtitleChoice(`hls-${index}`, { kind: 'hls', label: subtitleName(language, name), language, index });
+    });
+    const hasBulgarian = [...subtitleChoices.values()].some(choice => choice.language.toLowerCase().startsWith('bg') || /българ/i.test(choice.label));
+    if (!hasBulgarian) {
+      const unavailable = new Option(translationPending ? 'Български · превежда се, ще се появи при готовност' : catalogOnlySubtitle ? 'Български · има превод в каталог, файлът се търси' : 'Български · преводът се подготвя във фонов режим', 'bg-unavailable');
+      unavailable.disabled = true;
+      subtitleSelect.add(unavailable);
     }
-    trackButton.textContent = prefs.subtitles ? 'Субтитри: БГ' : 'Субтитри: изкл.';
-    trackButton.setAttribute('aria-pressed', String(prefs.subtitles));
-    savePrefs();
+    if (!subtitleChoices.size) subtitleSelect.options[0]!.textContent = 'Автоматично · няма налични субтитри';
+    const saved = prefs.subtitleTrack && prefs.subtitleTrack !== 'auto' && prefs.subtitleTrack !== 'off' && subtitleChoices.has(prefs.subtitleTrack) ? prefs.subtitleTrack : 'auto';
+    subtitleSelect.value = prefs.subtitles ? saved : 'off';
+    await applySubtitleChoice(subtitleSelect.value);
+  };
+  const attachNativeMediaFallback = (Hls: typeof import('hls.js/light').default) => {
+    const video = frame.querySelector('video');
+    if (!video) throw new Error('Vidstack did not create its video element');
+    nativeMediaFallback = video;
+    video.addEventListener('loadedmetadata', () => {
+      setLoading(false);
+      if (sourceKind === 'mp4' && streamProvider !== 'telegram') void loadLocalTrack();
+    }, { once: true });
+    video.addEventListener('canplay', () => setLoading(false), { once: true });
+    video.addEventListener('error', () => unsupported('Възпроизвеждането на видео източника е прекъснато.'), { once: true });
+    if (sourceKind === 'mp4') {
+      video.src = stream;
+      video.load();
+      return;
+    }
+    if (Hls.isSupported()) {
+      hls = new Hls({ enableWorker: true });
+      hls.on(Hls.Events.MANIFEST_PARSED, () => { void onManifestParsed(); });
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (data.fatal) unsupported('Възпроизвеждането на видео източника е прекъснато.');
+      });
+      hls.attachMedia(video);
+      hls.loadSource(stream);
+      return;
+    }
+    video.src = stream;
+    video.load();
   };
   const initialize = async () => {
     try {
@@ -134,62 +325,99 @@ if (root && frame) {
         const testUrl = testMode === 'mp4' ? 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4' : 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
         stream = `/api/hls?u=${encodeURIComponent(testUrl)}&r=`;
       } else {
-        let payload: { url?: string; type?: string; headers?: Record<string, string> };
+        let payload: { url?: string; type?: string; provider?: string; headers?: Record<string, string>; subtitles?: Array<{ lang: string; url: string; format: string }> };
         try {
           const providerId = root.dataset.provider;
           const providerEpisodeId = root.dataset.providerEpisodeId;
           const audio = new URLSearchParams(window.location.search).get('audio') === 'dub' ? 'dub' : 'sub';
-          const endpoint = providerId && providerEpisodeId
+          const endpoint = providerWatch && providerId && providerEpisodeId
             ? `/api/provider-stream?${new URLSearchParams({ provider: providerId, episodeId: providerEpisodeId, audio })}`
             : `/api/stream/${encodeURIComponent(root.dataset.anilistId!)}/${ep}`;
-          const response = await fetch(endpoint);
+          setLoading(true, 'Търсене на работещ видео източник…');
+          const response = await fetch(endpoint, { signal: AbortSignal.timeout(15_000) });
           payload = await response.json() as typeof payload;
           if (!response.ok) throw new Error('stream resolution failed');
         } catch { offerIframeFallback(); unsupported('Неуспешно извличане на видео източника. Можеш да отвориш страницата на доставчика.'); return; }
-        if (!payload.url || payload.type !== 'hls') { offerIframeFallback(); unsupported('Доставчикът не върна HLS източник. Можеш да отвориш страницата на доставчика.'); return; }
+        if (!payload.url || (payload.type !== 'hls' && payload.type !== 'mp4')) { offerIframeFallback(); unsupported('Доставчикът не върна поддържан видео източник. Можеш да отвориш страницата на доставчика.'); return; }
+        providerSubtitles = payload.subtitles ?? [];
+        streamProvider = payload.provider ?? '';
         const ref = payload.headers?.referer ?? '';
-        stream = `/api/hls?u=${encodeURIComponent(payload.url)}&r=${encodeURIComponent(ref)}`;
-        sourceKind = 'hls';
+        providerReferer = ref;
+        sourceKind = payload.type;
+        stream = payload.type === 'mp4' ? payload.url : `/api/hls?u=${encodeURIComponent(payload.url)}&r=${encodeURIComponent(ref)}`;
+        if (payload.hardsub === 'bg' || root.dataset.hardsub === 'bg' || payload.provider === 'telegram') {
+          const label = document.querySelector<HTMLElement>('[data-hardsub-label]');
+          if (label) { label.hidden = false; label.textContent = 'Български хардсаб · вграден във видеото'; }
+          subtitleSelect.closest('label')?.setAttribute('hidden', '');
+        }
       }
       if (sourceKind === 'mp4') qualitySelect.closest('label')?.setAttribute('hidden', '');
       const [{ default: Hls }, { VidstackPlayer, VidstackPlayerLayout }] = await Promise.all([
         import('hls.js/light'), import('vidstack/global/player'),
       ]);
-      mediaPlayer = await VidstackPlayer.create({ target: frame, layout: new VidstackPlayerLayout(), viewType: 'video', load: 'eager', playsInline: true, preload: 'metadata' });
+      // Set the source before Vidstack connects the custom element. Assigning `src` only after
+      // create() leaves SourceSelection without a loader in the browser build used here.
+      mediaPlayer = await VidstackPlayer.create({
+        target: frame,
+        layout: new VidstackPlayerLayout(),
+        viewType: 'video',
+        load: 'eager',
+        playsInline: true,
+        preload: 'metadata',
+        src: sourceKind === 'mp4'
+          ? { src: stream, type: 'video/mp4' }
+          : { src: stream, type: 'application/vnd.apple.mpegurl' },
+      });
       mediaPlayer.addEventListener('provider-change', () => {
         const provider = mediaPlayer?.provider;
         if (provider && 'library' in provider) provider.library = () => Promise.resolve({ default: Hls });
       });
       mediaPlayer.addEventListener('hls-instance', event => { hls = (event as CustomEvent<HlsType>).detail; });
       mediaPlayer.addEventListener('hls-manifest-parsed', () => { void onManifestParsed(); });
+      mediaPlayer.addEventListener('playing', () => setLoading(false));
+      mediaPlayer.addEventListener('can-play', () => setLoading(false));
+      mediaPlayer.addEventListener('loaded-data', () => setLoading(false));
       mediaPlayer.addEventListener('hls-error', event => { if ((event as CustomEvent<{ fatal?: boolean }>).detail?.fatal) unsupported('Възпроизвеждането на видео източника е прекъснато.'); });
-      mediaPlayer.addEventListener('loaded-metadata', () => { if (sourceKind === 'mp4') void loadLocalTrack(); });
+      mediaPlayer.addEventListener('loaded-metadata', () => {
+        setLoading(false);
+        if (sourceKind === 'mp4' && streamProvider !== 'telegram') void loadLocalTrack();
+      });
       mediaPlayer.addEventListener('error', () => unsupported('Възпроизвеждането на видео източника е прекъснато.'));
-      mediaPlayer.src = sourceKind === 'mp4'
-        ? { src: stream, type: 'video/mp4' }
-        : { src: stream, type: 'application/vnd.apple.mpegurl' };
       if (mediaPlayer.provider && 'library' in mediaPlayer.provider) mediaPlayer.provider.library = () => Promise.resolve({ default: Hls });
-    } catch { unsupported('Плеърът не успя да стартира.'); }
+      // Vidstack can leave source selection idle after a late source assignment. Recover using
+      // the same native video element so MP4 Range playback and HLS.js still use our normal proxy.
+      window.setTimeout(() => {
+        if (!mediaPlayer?.provider && !nativeMediaFallback) attachNativeMediaFallback(Hls);
+      }, 750);
+    } catch (error) {
+      console.error('Player initialization failed', error);
+      unsupported('Плеърът не успя да стартира.');
+    }
   };
   void initialize();
-  document.querySelector('[data-action="play"]')?.addEventListener('click', () => mediaPlayer?.paused ? void mediaPlayer.play() : mediaPlayer?.pause());
-  document.querySelector('[data-action="back"]')?.addEventListener('click', () => { if (mediaPlayer) mediaPlayer.currentTime = Math.max(0, mediaPlayer.currentTime - 5); });
-  document.querySelector('[data-action="forward"]')?.addEventListener('click', () => { if (mediaPlayer) mediaPlayer.currentTime += 5; });
+  const playback = () => nativeMediaFallback ?? mediaPlayer;
+  document.querySelector('[data-action="play"]')?.addEventListener('click', () => playback()?.paused ? void playback()?.play() : playback()?.pause());
+  document.querySelector('[data-action="back"]')?.addEventListener('click', () => { const player = playback(); if (player) player.currentTime = Math.max(0, player.currentTime - 5); });
+  document.querySelector('[data-action="forward"]')?.addEventListener('click', () => { const player = playback(); if (player) player.currentTime += 5; });
   document.querySelector('[data-action="fullscreen"]')?.addEventListener('click', () => { if (document.fullscreenElement) void document.exitFullscreen(); else void frame.requestFullscreen(); });
-  document.querySelector('[data-volume]')?.addEventListener('input', event => { if (mediaPlayer) mediaPlayer.volume = Number((event.currentTarget as HTMLInputElement).value); });
+  document.querySelector('[data-volume]')?.addEventListener('input', event => { const player = playback(); if (player) player.volume = Number((event.currentTarget as HTMLInputElement).value); });
   qualitySelect.addEventListener('change', () => { prefs.quality = Number(qualitySelect.value); if (hls) hls.currentLevel = prefs.quality; savePrefs(); });
-  trackButton.addEventListener('click', () => setTextTrack(!prefs.subtitles));
+  subtitleSelect.addEventListener('change', () => void applySubtitleChoice(subtitleSelect.value));
   fallbackToggle.addEventListener('click', () => {
     fallbackPanel.hidden = !fallbackPanel.hidden;
     fallbackToggle.textContent = fallbackPanel.hidden ? 'Отвори страницата на доставчика' : 'Скрий страницата на доставчика';
   });
   document.addEventListener('keydown', event => {
-    if (event.altKey || event.ctrlKey || event.metaKey || event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement || event.target instanceof HTMLTextAreaElement || !mediaPlayer) return;
-    if (event.code === 'Space') { event.preventDefault(); mediaPlayer.paused ? void mediaPlayer.play() : void mediaPlayer.pause(); }
-    if (event.key === 'ArrowLeft') mediaPlayer.currentTime = Math.max(0, mediaPlayer.currentTime - 5);
-    if (event.key === 'ArrowRight') mediaPlayer.currentTime += 5;
+    const player = playback();
+    if (event.altKey || event.ctrlKey || event.metaKey || event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement || event.target instanceof HTMLTextAreaElement || !player) return;
+    if (event.code === 'Space') { event.preventDefault(); player.paused ? void player.play() : void player.pause(); }
+    if (event.key === 'ArrowLeft') player.currentTime = Math.max(0, player.currentTime - 5);
+    if (event.key === 'ArrowRight') player.currentTime += 5;
     if (event.key.toLowerCase() === 'f') document.querySelector('[data-action="fullscreen"]')?.dispatchEvent(new Event('click'));
-    if (['c', 's'].includes(event.key.toLowerCase())) trackButton.click();
+    if (['c', 's'].includes(event.key.toLowerCase())) {
+      subtitleSelect.value = subtitleSelect.value === 'off' ? 'auto' : 'off';
+      subtitleSelect.dispatchEvent(new Event('change'));
+    }
   });
 }
 </script>

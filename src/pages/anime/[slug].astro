@@ -1,12 +1,14 @@
 ---
 import '../../styles/global.css';
 import { getTitles, getTitle, getEpisodes, getSubtitle } from '../../lib/db';
+import { matchedTelegramEpisodes } from '../../lib/telegram/storage';
 import { readFile } from 'node:fs/promises';
 const descriptions = JSON.parse(await readFile(new URL('../../../data/descriptions.json', import.meta.url), 'utf8').catch(() => '{}')) as Record<string, string | null>;
 export function getStaticPaths() { return getTitles().map(title => ({ params: { slug: title.slug } })); }
 const title = getTitle(Astro.params.slug ?? '');
 if (!title) throw new Error(`Unknown anime slug: ${Astro.params.slug}`);
 const episodes = getEpisodes(title.id);
+const telegramHardsubs = new Set(matchedTelegramEpisodes(title.id).filter(row => row.status === 'MATCHED' && Number(row.verified) === 1 && Number(row.primary_match) === 1).map(row => Number(row.episode_number)));
 const description = title.synopsis_bg ?? descriptions[String(title.id)] ?? 'Описание не е налично.';
 const displayTitle = title.title_bg ?? title.english ?? title.romaji ?? title.native ?? `Anime ${title.id}`;
 const alternatives = [title.native, title.romaji, title.english, title.title_bg].filter((value): value is string => Boolean(value) && value !== displayTitle);
@@ -23,8 +25,22 @@ const alternatives = [title.native, title.romaji, title.english, title.title_bg]
         {title.cover && <img class="cover" src={title.cover} alt={`Постер на ${displayTitle}`} width="460" height="650"/>}
         <div><p class="eyebrow">СИНОПСИС</p><h2 id="about-title">За анимето</h2><p class="synopsis">{description}</p></div>
       </section>
-      <section class="episodes-section" aria-labelledby="episodes-title"><div class="section-heading"><div><p class="section-kicker">{episodes.length} ЕПИЗОДА</p><h2 id="episodes-title">Епизоди</h2></div></div><div class="episodes">{episodes.map(ep => { const sub = getSubtitle(title.id, ep.number); const badge = sub?.status === 'qc' || sub?.status === 'final' ? 'БГ' : sub?.status === 'draft' ? 'МТ' : ''; return <a class="episode" href={`/watch/${title.slug}/${ep.number}`}><span>Епизод {ep.number}</span>{badge && <span class:list={['badge', { draft: badge === 'МТ' }]}>{badge}</span>}</a>; })}</div></section>
+      <section class="episodes-section" aria-labelledby="episodes-title"><div class="section-heading"><div><p class="section-kicker">{episodes.length} ЕПИЗОДА</p><h2 id="episodes-title">Епизоди</h2></div></div><div class="episodes" data-episode-list data-anime-id={title.id} data-anime-slug={title.slug} data-anime-title={displayTitle}>{episodes.map(ep => { const sub = getSubtitle(title.id, ep.number); const badge = telegramHardsubs.has(ep.number) ? 'БГ хардсаб' : sub?.status === 'qc' || sub?.status === 'final' ? 'БГ' : sub?.status === 'draft' ? 'МТ' : ''; return <a class="episode" data-episode-number={ep.number} href={`/watch/${title.slug}/${ep.number}`}><span>Епизод {ep.number}</span>{badge && <span class:list={['badge', { draft: badge === 'МТ' }]}>{badge}</span>}</a>; })}</div></section>
     </main>
     <footer class="footer"><div class="shell"><a href="/">Начало</a> · <a href="/about">За проекта</a> · <a href="/dmca">DMCA</a></div></footer>
   </body>
 </html>
+<script>
+const list=document.querySelector<HTMLElement>('[data-episode-list]');
+if(list){
+  const animeId=list.dataset.animeId!;const slug=list.dataset.animeSlug!;const title=list.dataset.animeTitle!;
+  const telegramUrl=(number:number,byNumber:Map<number,{number:number;messageId:number}>)=>{const video=byNumber.get(number);if(!video)return `/watch/${slug}/${number}`;return `/provider-watch?${new URLSearchParams({provider:'telegram',episodeId:String(video.messageId),number:String(number),title,animeId:slug,anilistId:animeId})}`;};
+  const routeFor=(number:number,byNumber:Map<number,{number:number;messageId:number}>)=>{const params=new URLSearchParams(new URL(telegramUrl(number,byNumber),location.origin).search);for(const direction of ['previous','next'] as const){const neighborNumber=direction==='previous'?number-1:number+1;if(byNumber.has(neighborNumber)||list.querySelector(`[data-episode-number="${neighborNumber}"]`))params.set(`${direction}Url`,telegramUrl(neighborNumber,byNumber));}return `/provider-watch?${params}`;};
+  void fetch(`/api/telegram/catalog/${encodeURIComponent(animeId)}`,{cache:'no-store'}).then(response=>response.ok?response.json():null).then((data:unknown)=>{
+    if(!data||typeof data!=='object'||!Array.isArray((data as {episodes?:unknown}).episodes))return;
+    const episodes=(data as {episodes:Array<{number:number;messageId:number}>}).episodes;const byNumber=new Map(episodes.map(item=>[item.number,item]));
+    for(const item of episodes){let link=list.querySelector<HTMLAnchorElement>(`[data-episode-number="${item.number}"]`);if(!link){link=document.createElement('a');link.className='episode';link.dataset.episodeNumber=String(item.number);link.innerHTML=`<span>Епизод ${item.number}</span>`;list.append(link);}link.href=routeFor(item.number,byNumber);let badge=link.querySelector<HTMLElement>('.badge');if(!badge){badge=document.createElement('span');badge.className='badge';link.append(badge);}badge.classList.remove('draft');badge.textContent='БГ хардсаб';}
+    const count=list.closest('section')?.querySelector<HTMLElement>('.section-kicker');if(count)count.textContent=`${list.querySelectorAll('[data-episode-number]').length} ЕПИЗОДА`;
+  }).catch(()=>{});
+}
+</script>

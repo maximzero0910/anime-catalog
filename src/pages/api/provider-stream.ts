@@ -14,6 +14,15 @@ export async function GET({ request }: { request: Request }): Promise<Response> 
   try {
     const sources = await provider.resolve(episodeId, mode);
     for (const source of sources) {
+      if (source.provider === 'telegram' && source.type === 'mp4' && source.url.startsWith('/api/telegram/media/')) {
+        return Response.json({ url: source.url, type: source.type, quality: source.quality, headers: source.headers, subtitles: [], audio: source.audio, provider: source.provider, hardsub: 'bg' });
+      }
+      if (source.provider === 'playtube' && source.type === 'mp4') {
+        const proxy = new URL('/api/hls', url.origin);
+        proxy.searchParams.set('u', source.url);
+        proxy.searchParams.set('r', source.headers.referer ?? 'https://playtube.tv/');
+        return Response.json({ url: `${proxy.pathname}${proxy.search}`, type: source.type, quality: source.quality, headers: {}, subtitles: [], audio: source.audio, provider: source.provider, hardsub: 'bg' }, { headers: { 'cache-control': 'no-store' } });
+      }
       if (source.type === 'hls' && /^https?:\/\//i.test(source.url) && await verifyPlayablePlaylist(source.url, source.headers)) {
         return Response.json({ url: source.url, type: source.type, quality: source.quality, headers: source.headers, subtitles: source.subtitles, audio: source.audio, provider: source.provider });
       }
