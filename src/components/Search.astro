@@ -2,7 +2,7 @@
   <div class="search-heading">
     <p class="eyebrow">ОТКРИЙ СЛЕДВАЩОТО СИ ЗАГЛАВИЕ</p>
     <h2 id="search-title">Търси в аниме каталога</h2>
-    <p class="muted">Резултатите идват директно от избрания реален източник.</p>
+    <p class="muted">Търси сред заглавията на избрания източник и стеснявай по AniList метаданни.</p>
   </div>
   <form class="search-form" id="provider-form" role="search">
     <label class="sr-only" for="provider-query">Заглавие на анимето</label>
@@ -20,112 +20,290 @@
     <button class="search-submit" type="submit"><span>Търси</span><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     <button class="search-clear" id="search-clear" type="button" aria-label="Изчисти търсенето" title="Изчисти">×</button>
   </form>
+  <div class="search-filter-area">
+    <div class="search-filter-bar" role="toolbar" aria-label="Филтри за аниме">
+      <details class="filter-popover" data-filter-popover>
+        <summary><span class="filter-icon" aria-hidden="true">◇</span> Жанр <span class="filter-count" data-group-count="genres"></span><span class="filter-chevron" aria-hidden="true">⌄</span></summary>
+        <div class="filter-panel genre-panel"><fieldset><legend>Избери един или повече жанрове</legend><div class="filter-options genre-options">
+          {['Action', 'Adventure', 'Comedy', 'Drama', 'Fantasy', 'Horror', 'Mystery', 'Romance', 'Sci-Fi', 'Slice of Life', 'Sports', 'Supernatural', 'Thriller', 'Psychological', 'Isekai', 'Mecha'].map(genre => <label class="filter-option"><input form="provider-form" type="checkbox" name="genre" value={genre}/><span>{genre}</span></label>)}
+        </div></fieldset></div>
+      </details>
+      <details class="filter-popover" data-filter-popover>
+        <summary><span class="filter-icon" aria-hidden="true">▣</span> Тип <span class="filter-count" data-group-count="types"></span><span class="filter-chevron" aria-hidden="true">⌄</span></summary>
+        <div class="filter-panel"><fieldset><legend>Тип аниме</legend><div class="filter-options">
+          {[['TV', 'TV'], ['MOVIE', 'Movie'], ['OVA', 'OVA'], ['ONA', 'ONA'], ['SPECIAL', 'Special'], ['MUSIC', 'Music']].map(([value, label]) => <label class="filter-option"><input form="provider-form" type="checkbox" name="type" value={value}/><span>{label}</span></label>)}
+        </div></fieldset></div>
+      </details>
+      <details class="filter-popover" data-filter-popover>
+        <summary><span class="filter-icon" aria-hidden="true">▦</span> Година <span class="filter-count" data-group-count="year"></span><span class="filter-chevron" aria-hidden="true">⌄</span></summary>
+        <div class="filter-panel year-panel"><fieldset><legend>Година на издаване</legend>
+          <label class="filter-field">Конкретна година<select form="provider-form" name="year" data-year-select><option value="">Всяка година</option></select></label>
+          <div class="year-range"><label class="filter-field">От<input form="provider-form" name="yearFrom" type="number" min="1960" max="2035" inputmode="numeric" placeholder="1960"/></label><label class="filter-field">До<input form="provider-form" name="yearTo" type="number" min="1960" max="2035" inputmode="numeric" placeholder="2026"/></label></div>
+          <label class="filter-option recent-option"><input form="provider-form" name="recent" type="checkbox"/><span>Излъчва се или е излязло скоро</span></label>
+        </fieldset></div>
+      </details>
+      <details class="filter-popover" data-filter-popover>
+        <summary><span class="filter-icon" aria-hidden="true">◷</span> Сезон <span class="filter-count" data-group-count="season"></span><span class="filter-chevron" aria-hidden="true">⌄</span></summary>
+        <div class="filter-panel"><label class="filter-field">Сезон<select form="provider-form" name="season"><option value="">Всеки сезон</option><option value="WINTER">Winter</option><option value="SPRING">Spring</option><option value="SUMMER">Summer</option><option value="FALL">Fall</option></select></label></div>
+      </details>
+      <details class="filter-popover" data-filter-popover>
+        <summary><span class="filter-icon" aria-hidden="true">◉</span> Статус <span class="filter-count" data-group-count="status"></span><span class="filter-chevron" aria-hidden="true">⌄</span></summary>
+        <div class="filter-panel"><label class="filter-field">Статус<select form="provider-form" name="status"><option value="">Все</option><option value="RELEASING">Currently Airing</option><option value="FINISHED">Finished</option><option value="NOT_YET_RELEASED">Upcoming</option></select></label></div>
+      </details>
+      <details class="filter-popover" data-filter-popover>
+        <summary><span class="filter-icon" aria-hidden="true">▤</span> Формат <span class="filter-count" data-group-count="format"></span><span class="filter-chevron" aria-hidden="true">⌄</span></summary>
+        <div class="filter-panel"><label class="filter-field">Формат<select form="provider-form" name="format"><option value="">Все</option><option value="SERIES">Series</option><option value="MOVIE">Movie</option><option value="SHORT">Short</option><option value="SPECIAL">Special</option></select></label></div>
+      </details>
+      <details class="filter-popover" data-filter-popover>
+        <summary><span class="filter-icon" aria-hidden="true">★</span> Оценка <span class="filter-count" data-group-count="rating"></span><span class="filter-chevron" aria-hidden="true">⌄</span></summary>
+        <div class="filter-panel rating-panel"><label class="filter-field" for="minimum-rating">Минимална оценка <output data-rating-value>0.0</output></label><input form="provider-form" id="minimum-rating" name="minRating" type="range" min="0" max="10" step="0.5" value="0"/></div>
+      </details>
+      <details class="filter-popover sort-popover" data-filter-popover>
+        <summary><span class="filter-icon" aria-hidden="true">↕</span> Подреди <span class="filter-chevron" aria-hidden="true">⌄</span></summary>
+        <div class="filter-panel"><label class="filter-field">Подреди по<select form="provider-form" name="sort"><option value="popularity">Popularity</option><option value="rating">Highest Rated</option><option value="recent">Most Recent</option><option value="alphabetical">Alphabetical</option><option value="added">Recently Added</option></select></label></div>
+      </details>
+    </div>
+    <div class="filter-state" data-filter-state hidden>
+      <div class="filter-chips" data-filter-chips aria-label="Избрани филтри"></div>
+      <div class="filter-state-actions"><span class="active-filter-count" data-active-filter-count></span><button type="button" class="clear-filters" data-clear-filters>Изчисти всички</button></div>
+    </div>
+  </div>
   <p class="search-hint">Натисни Enter за търсене</p>
   <div class="provider-results" id="provider-results" aria-live="polite" aria-busy="false"></div>
 </section>
 
 <script>
-import { ConsumetError, getEpisodeStreams, getProviderAnime, getSourceKind, searchProvider, type ConsumetSearchResult } from '../lib/consumet';
+import { ConsumetError, filterProviderResults, searchProvider, type ConsumetSearchResult } from '../lib/consumet';
+import type { CatalogFilters } from '../lib/catalog-filters';
 
 const form = document.querySelector<HTMLFormElement>('#provider-form');
+const filterArea = document.querySelector<HTMLElement>('.search-filter-area');
 const queryInput = document.querySelector<HTMLInputElement>('#provider-query');
 const providerSelect = document.querySelector<HTMLSelectElement>('#provider-name');
 const results = document.querySelector<HTMLDivElement>('#provider-results');
 const clearButton = document.querySelector<HTMLButtonElement>('#search-clear');
+const filterState = document.querySelector<HTMLElement>('[data-filter-state]');
+const chipList = document.querySelector<HTMLElement>('[data-filter-chips]');
+const activeCount = document.querySelector<HTMLElement>('[data-active-filter-count]');
+const clearFilters = document.querySelector<HTMLButtonElement>('[data-clear-filters]');
+const ratingInput = document.querySelector<HTMLInputElement>('[name="minRating"]');
+const ratingValue = document.querySelector<HTMLOutputElement>('[data-rating-value]');
+const yearSelect = document.querySelector<HTMLSelectElement>('[data-year-select]');
+
+const seasons: Record<string, string> = { WINTER: 'Winter', SPRING: 'Spring', SUMMER: 'Summer', FALL: 'Fall' };
+const statuses: Record<string, string> = { RELEASING: 'Currently Airing', FINISHED: 'Finished', NOT_YET_RELEASED: 'Upcoming' };
+const formats: Record<string, string> = { SERIES: 'Series', MOVIE: 'Movie', SHORT: 'Short', SPECIAL: 'Special' };
+const sortLabels: Record<string, string> = { popularity: 'Popularity', rating: 'Highest Rated', recent: 'Most Recent', alphabetical: 'Alphabetical', added: 'Recently Added' };
+let rawResults: ConsumetSearchResult[] = [];
+let activeProvider = 'anikoto';
+let activeQuery = '';
+let searchController: AbortController | undefined;
+let filterController: AbortController | undefined;
+let searchSequence = 0;
+let filterSequence = 0;
+let filterTimer: ReturnType<typeof setTimeout> | undefined;
+let lastFilterKey = '';
+
+if (yearSelect) for (let year = new Date().getFullYear(); year >= 1960; year--) yearSelect.add(new Option(String(year), String(year)));
 
 function showError(error: unknown): HTMLElement {
-  const box = document.createElement('div');
-  box.className = 'search-message search-error';
-  const heading = document.createElement('strong');
-  const message = document.createElement('p');
-  if (error instanceof ConsumetError) {
-    heading.textContent = error.status === 404 ? 'Маршрутът не е намерен' : 'Търсенето не беше успешно';
-    message.textContent = error.message;
-  } else {
-    heading.textContent = 'Неуспешна заявка';
-    message.textContent = 'Възникна неочаквана грешка при заявката към доставчика.';
-  }
-  box.append(heading, message);
-  return box;
+  const box = document.createElement('div'); box.className = 'search-message search-error';
+  const heading = document.createElement('strong'); heading.textContent = error instanceof ConsumetError && error.status === 404 ? 'Маршрутът не е намерен' : 'Търсенето не беше успешно';
+  const message = document.createElement('p'); message.textContent = error instanceof Error ? error.message : 'Възникна неочаквана грешка при заявката.';
+  box.append(heading, message); return box;
 }
 
 function makeAnimeCard(anime: ConsumetSearchResult, provider: string): HTMLElement {
   const animeTitle = typeof anime.title === 'string' ? anime.title : anime.title.english ?? anime.title.romaji ?? anime.title.native ?? 'Без заглавие';
   const poster = anime.image ?? anime.cover;
+  const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  const detailParams = new URLSearchParams({ provider, id: anime.id, title: animeTitle, returnTo, ...(anime.anilistId ? { anilistId: String(anime.anilistId) } : {}), ...(poster ? { image: poster } : {}) });
+  const detailUrl = `/provider-anime?${detailParams}`;
   const card = document.createElement('article'); card.className = 'provider-card';
+  const posterLink = document.createElement('a'); posterLink.className = 'provider-poster-link'; posterLink.href = detailUrl; posterLink.setAttribute('aria-label', `Епизоди на ${animeTitle}`);
   if (poster) {
-    const image = document.createElement('img'); image.className = 'provider-poster'; image.src = poster; image.alt = `Постер: ${animeTitle}`; image.loading = 'lazy';
-    card.append(image);
+    const image = document.createElement('img'); image.className = 'provider-poster'; image.src = poster; image.alt = `Постер: ${animeTitle}`; image.loading = 'lazy'; posterLink.append(image);
+    image.addEventListener('error', () => { const placeholder = document.createElement('div'); placeholder.className = 'provider-poster poster-empty'; placeholder.setAttribute('aria-hidden', 'true'); image.replaceWith(placeholder); }, { once: true });
   } else {
-    const art = document.createElement('div'); art.className = 'provider-poster poster-empty'; art.setAttribute('aria-hidden', 'true'); card.append(art);
+    const art = document.createElement('div'); art.className = 'provider-poster poster-empty'; art.setAttribute('aria-hidden', 'true'); posterLink.append(art);
   }
+  card.append(posterLink);
   const body = document.createElement('div'); body.className = 'provider-card-body';
-  const title = document.createElement('h3'); title.textContent = animeTitle;
-  const meta = document.createElement('p'); meta.className = 'provider-card-meta'; meta.textContent = [anime.releaseDate, anime.type, provider].filter(Boolean).join(' · ');
-  const detailButton = document.createElement('button'); detailButton.className = 'text-button'; detailButton.type = 'button'; detailButton.textContent = 'Покажи епизодите';
-  const details = document.createElement('div'); details.className = 'episode-results';
-  detailButton.addEventListener('click', async () => {
-    detailButton.disabled = true; details.textContent = 'Зареждане на епизодите…';
-    try {
-      const info = await getProviderAnime(provider, anime.id);
-      details.replaceChildren();
-      if (!info.episodes?.length) { details.textContent = 'Този доставчик не върна епизоди.'; return; }
-      for (const episode of info.episodes) {
-        const row = document.createElement('div'); row.className = 'provider-episode';
-        const episodeLabel = `${episode.number}. ${episode.title || 'Епизод'}`;
-        const label = provider === 'anikoto' ? document.createElement('a') : document.createElement('span');
-        if (provider === 'anikoto') {
-          label.className = 'episode-watch-link';
-          const params = new URLSearchParams({ provider, animeId: anime.id, episodeId: episode.id, number: String(episode.number), title: animeTitle });
-          (label as HTMLAnchorElement).href = `/provider-watch?${params}`;
-          label.textContent = `${episodeLabel} · Гледай`;
-        } else label.textContent = episodeLabel;
-        const inspect = document.createElement('button'); inspect.type = 'button'; inspect.className = 'episode-source-button'; inspect.textContent = 'Източници';
-        const sourceInfo = document.createElement('span'); sourceInfo.className = 'source-info';
-        inspect.addEventListener('click', async () => {
-          inspect.disabled = true; sourceInfo.textContent = 'Проверка…';
-          try {
-            const streamData = await getEpisodeStreams(provider, episode.id);
-            const sources = streamData.sources ?? [];
-            sourceInfo.textContent = sources.length ? sources.map(source => `${({ hls: 'HLS', dash: 'DASH', mp4: 'MP4', unsupported: 'Неподдържан формат' } as const)[getSourceKind(source)]}${source.quality ? ` · ${source.quality}` : ''}`).join(', ') : 'Няма налични източници.';
-          } catch (error) {
-            sourceInfo.textContent = error instanceof ConsumetError ? error.message : 'Резолюцията е неуспешна.';
-          } finally { inspect.disabled = false; }
-        });
-        row.append(label, inspect, sourceInfo); details.append(row);
-      }
-    } catch (error) { details.replaceChildren(showError(error)); }
-    finally { detailButton.disabled = false; }
-  });
-  body.append(title, meta, detailButton, details); card.append(body); return card;
+  const title = document.createElement('h3'); const titleLink = document.createElement('a'); titleLink.className = 'provider-title-link'; titleLink.href = detailUrl; titleLink.textContent = animeTitle; title.append(titleLink);
+  const meta = document.createElement('p'); meta.className = 'provider-card-meta'; meta.textContent = [anime.year ?? anime.releaseDate, anime.type, anime.rating != null ? `★ ${anime.rating.toFixed(1)}` : '', ...(anime.genres ?? []).slice(0, 2), provider].filter(Boolean).join(' · ');
+  const episodesLink = document.createElement('a'); episodesLink.className = 'episode-select-link'; episodesLink.href = detailUrl; episodesLink.textContent = 'Избери епизод →';
+  body.append(title, meta, episodesLink); card.append(body); return card;
 }
 
-form?.addEventListener('submit', async event => {
-  event.preventDefault();
-  if (!queryInput || !providerSelect || !results) return;
-  const query = queryInput.value.trim();
-  if (!query) return;
-  results.setAttribute('aria-busy', 'true'); results.replaceChildren();
-  const loading = document.createElement('p'); loading.className = 'search-message'; loading.textContent = `Търсене на „${query}“…`; results.append(loading);
-  try {
-    const provider = providerSelect.value;
-    const data = await searchProvider(provider, query);
-    results.replaceChildren();
-    if (!data.results?.length) {
-      const empty = document.createElement('p'); empty.className = 'search-message'; empty.textContent = `Няма резултати за „${query}“ при ${provider}.`; results.append(empty); return;
+function readFilters(): CatalogFilters {
+  if (!form) return { sort: 'popularity' };
+  const value = (name: string) => (form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement).value;
+  return {
+    genres: [...(filterArea?.querySelectorAll<HTMLInputElement>('input[name="genre"]:checked') ?? [])].map(input => input.value),
+    types: [...(filterArea?.querySelectorAll<HTMLInputElement>('input[name="type"]:checked') ?? [])].map(input => input.value),
+    year: Number(value('year')) || null, yearFrom: Number(value('yearFrom')) || null, yearTo: Number(value('yearTo')) || null,
+    recent: (form.elements.namedItem('recent') as HTMLInputElement).checked,
+    season: value('season'), status: value('status'), format: value('format'),
+    minRating: Number(ratingInput?.value ?? 0), sort: value('sort'),
+  };
+}
+
+function assignValue(name: string, value: string) {
+  const control = form?.elements.namedItem(name);
+  if (control instanceof HTMLSelectElement || control instanceof HTMLInputElement) control.value = value;
+}
+function assignChecked(name: string, value: string, checked: boolean) {
+  const input = form?.querySelector<HTMLInputElement>(`input[name="${name}"][value="${CSS.escape(value)}"]`);
+  if (input) input.checked = checked;
+}
+
+function currentChips(filters: CatalogFilters): Array<{ label: string; remove: () => void }> {
+  const chips: Array<{ label: string; remove: () => void }> = [];
+  for (const genre of filters.genres ?? []) chips.push({ label: genre, remove: () => assignChecked('genre', genre, false) });
+  for (const type of filters.types ?? []) chips.push({ label: `Type: ${type === 'MOVIE' ? 'Movie' : type}`, remove: () => assignChecked('type', type, false) });
+  if (filters.year) chips.push({ label: `Year: ${filters.year}`, remove: () => assignValue('year', '') });
+  else if (filters.yearFrom || filters.yearTo) chips.push({ label: `Years: ${filters.yearFrom ?? '…'}–${filters.yearTo ?? '…'}`, remove: () => { assignValue('yearFrom', ''); assignValue('yearTo', ''); } });
+  if (filters.recent) chips.push({ label: 'Ongoing / recent', remove: () => { (form?.elements.namedItem('recent') as HTMLInputElement).checked = false; } });
+  if (filters.season) chips.push({ label: `Season: ${seasons[filters.season] ?? filters.season}`, remove: () => assignValue('season', '') });
+  if (filters.status) chips.push({ label: `Status: ${statuses[filters.status] ?? filters.status}`, remove: () => assignValue('status', '') });
+  if (filters.format) chips.push({ label: `Format: ${formats[filters.format] ?? filters.format}`, remove: () => assignValue('format', '') });
+  if (filters.minRating) chips.push({ label: `Rating ≥ ${filters.minRating.toFixed(1)}`, remove: () => { if (ratingInput) ratingInput.value = '0'; } });
+  if (filters.sort && filters.sort !== 'popularity') chips.push({ label: `Sort: ${sortLabels[filters.sort] ?? filters.sort}`, remove: () => assignValue('sort', 'popularity') });
+  return chips;
+}
+
+function updateFilterUI() {
+  const filters = readFilters(); const chips = currentChips(filters); const count = chips.length;
+  if (filterState) filterState.hidden = count === 0;
+  if (activeCount) activeCount.textContent = `${count} active ${count === 1 ? 'filter' : 'filters'}`;
+  if (clearFilters) clearFilters.disabled = count === 0 && filters.sort === 'popularity';
+  if (chipList) {
+    chipList.replaceChildren();
+    for (const chip of chips) {
+      const item = document.createElement('span'); item.className = 'filter-chip'; item.append(document.createTextNode(chip.label));
+      const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '×'; remove.setAttribute('aria-label', `Remove ${chip.label}`);
+      remove.addEventListener('click', () => { chip.remove(); updateFilterUI(); scheduleFilter(); }); item.append(remove); chipList.append(item);
     }
-    const count = document.createElement('p'); count.className = 'result-count'; count.textContent = `${data.results.length} реални резултата · ${provider}`;
-    const grid = document.createElement('div'); grid.className = 'provider-grid';
-    for (const anime of data.results) grid.append(makeAnimeCard(anime, provider));
-    results.append(count, grid);
-  } catch (error) { results.replaceChildren(showError(error)); }
-  finally { results.setAttribute('aria-busy', 'false'); }
+  }
+  const counts: Record<string, number> = { genres: filters.genres?.length ?? 0, types: filters.types?.length ?? 0, year: Number(Boolean(filters.year || filters.yearFrom || filters.yearTo || filters.recent)), season: Number(Boolean(filters.season)), status: Number(Boolean(filters.status)), format: Number(Boolean(filters.format)), rating: Number(Boolean(filters.minRating)) };
+  for (const [key, value] of Object.entries(counts)) { const badge = document.querySelector<HTMLElement>(`[data-group-count="${key}"]`); if (badge) { badge.textContent = value ? String(value) : ''; badge.hidden = !value; } }
+  if (ratingValue && ratingInput) ratingValue.value = Number(ratingInput.value).toFixed(1);
+}
+
+function saveURLState() {
+  const url = new URL(window.location.href);
+  for (const key of ['q', 'provider', 'genre', 'type', 'year', 'yearFrom', 'yearTo', 'recent', 'season', 'status', 'format', 'minRating', 'sort']) url.searchParams.delete(key);
+  if (activeQuery) url.searchParams.set('q', activeQuery);
+  if (activeProvider) url.searchParams.set('provider', activeProvider);
+  const filters = readFilters();
+  for (const item of filters.genres ?? []) url.searchParams.append('genre', item);
+  for (const item of filters.types ?? []) url.searchParams.append('type', item);
+  for (const key of ['year', 'yearFrom', 'yearTo', 'season', 'status', 'format'] as const) if (filters[key]) url.searchParams.set(key, String(filters[key]));
+  if (filters.recent) url.searchParams.set('recent', '1');
+  if (filters.minRating) url.searchParams.set('minRating', String(filters.minRating));
+  if (filters.sort && filters.sort !== 'popularity') url.searchParams.set('sort', filters.sort);
+  history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+}
+
+function renderSkeletons() {
+  if (!results) return;
+  results.replaceChildren(); const grid = document.createElement('div'); grid.className = 'provider-grid';
+  for (let i = 0; i < 4; i++) { const card = document.createElement('div'); card.className = 'provider-card search-skeleton'; const poster = document.createElement('div'); poster.className = 'skeleton-poster'; const copy = document.createElement('div'); copy.className = 'skeleton-copy'; for (let j = 0; j < 3; j++) copy.append(document.createElement('i')); card.append(poster, copy); grid.append(card); }
+  results.append(grid);
+}
+
+function renderResults(items: ConsumetSearchResult[]) {
+  if (!results) return;
+  results.replaceChildren();
+  if (!items.length) {
+    const empty = document.createElement('div'); empty.className = 'search-empty-state';
+    const heading = document.createElement('strong'); heading.textContent = 'Няма заглавия с тези филтри';
+    const message = document.createElement('p'); message.textContent = 'Премахни един или повече филтри или изчисти всичко, за да видиш резултатите отново.';
+    const reset = document.createElement('button'); reset.type = 'button'; reset.className = 'clear-filters'; reset.textContent = 'Изчисти филтрите'; reset.addEventListener('click', resetFilters); empty.append(heading, message, reset); results.append(empty); return;
+  }
+  const count = document.createElement('p'); count.className = 'result-count'; count.textContent = `${items.length} заглавия · ${activeProvider}`;
+  const grid = document.createElement('div'); grid.className = 'provider-grid'; for (const anime of items) grid.append(makeAnimeCard(anime, activeProvider)); results.append(count, grid);
+}
+
+function signature() { return JSON.stringify([activeProvider, activeQuery, rawResults.map(item => item.id), readFilters()]); }
+async function applyFilters(force = false) {
+  if (!activeQuery || !rawResults.length || !results) return;
+  const key = signature(); if (!force && key === lastFilterKey) return; lastFilterKey = key;
+  filterController?.abort(); const controller = new AbortController(); filterController = controller; const sequence = ++filterSequence;
+  results.setAttribute('aria-busy', 'true'); renderSkeletons(); saveURLState();
+  try {
+    const data = await filterProviderResults(activeProvider, activeQuery, rawResults, readFilters(), controller.signal);
+    if (!controller.signal.aborted && sequence === filterSequence) renderResults(data.results);
+  } catch (error) { if (!controller.signal.aborted && sequence === filterSequence) results.replaceChildren(showError(error)); }
+  finally { if (sequence === filterSequence) results.setAttribute('aria-busy', 'false'); }
+}
+function scheduleFilter() {
+  updateFilterUI(); saveURLState(); if (!rawResults.length) return;
+  if (filterTimer) clearTimeout(filterTimer); filterController?.abort(); filterTimer = setTimeout(() => { void applyFilters(); }, 180);
+}
+function resetFilters() {
+  filterArea?.querySelectorAll<HTMLInputElement>('input[name="genre"], input[name="type"]').forEach(input => { input.checked = false; });
+  for (const name of ['year', 'yearFrom', 'yearTo', 'season', 'status', 'format']) assignValue(name, '');
+  (form?.elements.namedItem('recent') as HTMLInputElement).checked = false; assignValue('sort', 'popularity');
+  if (ratingInput) ratingInput.value = '0'; updateFilterUI(); void applyFilters(true);
+}
+function restoreURLState(): string {
+  const params = new URLSearchParams(window.location.search); if (queryInput) queryInput.value = params.get('q') ?? '';
+  if (providerSelect && params.has('provider')) providerSelect.value = params.get('provider')!;
+  for (const value of params.getAll('genre')) assignChecked('genre', value, true);
+  for (const value of params.getAll('type')) assignChecked('type', value, true);
+  for (const key of ['year', 'yearFrom', 'yearTo', 'season', 'status', 'format', 'sort'] as const) { const value = params.get(key); if (value) assignValue(key, value); }
+  (form?.elements.namedItem('recent') as HTMLInputElement).checked = params.get('recent') === '1';
+  if (ratingInput && params.has('minRating')) ratingInput.value = params.get('minRating')!; updateFilterUI(); return params.get('q') ?? '';
+}
+async function search(query: string) {
+  if (!queryInput || !providerSelect || !results || !query.trim()) return;
+  activeQuery = query.trim(); activeProvider = providerSelect.value; searchController?.abort(); filterController?.abort();
+  const controller = new AbortController(); searchController = controller; const sequence = ++searchSequence;
+  rawResults = []; lastFilterKey = ''; results.setAttribute('aria-busy', 'true'); renderSkeletons(); saveURLState();
+  try {
+    const data = await searchProvider(activeProvider, activeQuery, controller.signal);
+    if (controller.signal.aborted || sequence !== searchSequence) return;
+    rawResults = data.results ?? [];
+    if (!rawResults.length) { results.replaceChildren(); const empty = document.createElement('p'); empty.className = 'search-message'; empty.textContent = `Няма резултати за „${activeQuery}“ при ${activeProvider}.`; results.append(empty); return; }
+    await applyFilters(true);
+  } catch (error) { if (!controller.signal.aborted && sequence === searchSequence) results.replaceChildren(showError(error)); }
+  finally { if (sequence === searchSequence) results.setAttribute('aria-busy', 'false'); }
+}
+
+form?.addEventListener('submit', event => { event.preventDefault(); if (queryInput) void search(queryInput.value); });
+providerSelect?.addEventListener('change', () => { if (activeQuery) void search(activeQuery); });
+filterArea?.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[name="genre"], [name="type"], [name="year"], [name="yearFrom"], [name="yearTo"], [name="recent"], [name="season"], [name="status"], [name="format"], [name="minRating"], [name="sort"]').forEach(control => {
+  control.addEventListener(control instanceof HTMLInputElement && control.type === 'range' ? 'input' : 'change', () => {
+    if (control.name === 'year') { assignValue('yearFrom', ''); assignValue('yearTo', ''); }
+    if (control.name === 'yearFrom' || control.name === 'yearTo') assignValue('year', '');
+    scheduleFilter();
+  });
+});
+clearFilters?.addEventListener('click', resetFilters);
+clearButton?.addEventListener('click', () => {
+  if (queryInput) queryInput.value = ''; activeQuery = ''; rawResults = []; searchController?.abort(); filterController?.abort(); lastFilterKey = '';
+  results?.replaceChildren(); results?.setAttribute('aria-busy', 'false');
+  const url = new URL(window.location.href); for (const key of ['q', 'provider', 'genre', 'type', 'year', 'yearFrom', 'yearTo', 'recent', 'season', 'status', 'format', 'minRating', 'sort']) url.searchParams.delete(key);
+  history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`); queryInput?.focus();
 });
 
-clearButton?.addEventListener('click', () => {
-  if (queryInput) queryInput.value = '';
-  results?.replaceChildren();
-  results?.setAttribute('aria-busy', 'false');
-  queryInput?.focus();
-});
+const popovers = [...document.querySelectorAll<HTMLDetailsElement>('[data-filter-popover]')];
+function positionPopover(popover: HTMLDetailsElement) {
+  const panel = popover.querySelector<HTMLElement>('.filter-panel')!; const rect = popover.querySelector('summary')!.getBoundingClientRect();
+  if (window.matchMedia('(max-width: 760px)').matches) {
+    panel.style.top = `${Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 380))}px`;
+    panel.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - 332))}px`;
+  } else {
+    panel.style.top = ''; panel.style.left = ''; panel.style.right = '';
+    if (rect.left + panel.offsetWidth > window.innerWidth - 12) { panel.style.left = 'auto'; panel.style.right = '0'; }
+  }
+}
+for (const popover of popovers) popover.addEventListener('toggle', () => { if (popover.open) { for (const other of popovers) if (other !== popover) other.open = false; positionPopover(popover); } });
+document.addEventListener('pointerdown', event => { if (!popovers.some(popover => popover.contains(event.target as Node))) popovers.forEach(popover => { popover.open = false; }); });
+document.addEventListener('keydown', event => { if (event.key === 'Escape') { const open = popovers.find(popover => popover.open); if (open) { open.open = false; open.querySelector('summary')?.focus(); } } });
+window.addEventListener('resize', () => popovers.filter(popover => popover.open).forEach(positionPopover));
+
+const restoredQuery = restoreURLState(); if (restoredQuery) void search(restoredQuery);
+window.addEventListener('popstate', () => { const query = restoreURLState(); if (query) void search(query); });
 </script>

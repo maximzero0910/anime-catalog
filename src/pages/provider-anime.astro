@@ -1,0 +1,128 @@
+---
+import '../styles/global.css';
+---
+<html lang="bg">
+  <head>
+    <meta charset="utf-8"/><meta name="viewport" content="width=device-width"/>
+    <title>Избери епизод — Anime BG</title>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="shell header-row"><a class="brand" href="/">ANIME BG</a><nav class="site-nav"><a href="/#catalog">Каталог</a><a href="/#search">Открий</a></nav></div>
+    </header>
+    <main class="shell provider-anime-page" data-provider-anime>
+      <a class="back-link" href="/#search" data-return-link>← Обратно към откриването</a>
+      <section class="provider-anime-heading" aria-labelledby="provider-anime-title">
+        <img class="provider-anime-poster" data-anime-poster alt="" hidden/>
+        <div><p class="eyebrow" data-anime-provider>АНИМЕ</p><h1 id="provider-anime-title" data-anime-title>Зареждане…</h1><p class="muted" data-anime-meta>Избери епизод, за да започнеш гледането.</p></div>
+      </section>
+      <section class="provider-episodes-section" aria-labelledby="provider-episodes-title">
+        <div class="section-heading"><div><p class="section-kicker" data-episode-count>ЕПИЗОДИ</p><h2 id="provider-episodes-title">Избери епизод</h2></div></div>
+        <div class="episodes provider-episodes" data-episode-list aria-live="polite"><p class="search-message">Зареждане на епизодите…</p></div>
+      </section>
+    </main>
+    <footer class="footer"><div class="shell"><a href="/#search">Към търсенето</a> · Български субтитри, когато са налични.</div></footer>
+  </body>
+</html>
+
+<script>
+  import { ConsumetError, getEpisodeStreams, getProviderAnime, getSourceKind } from '../lib/consumet';
+
+  const params = new URLSearchParams(window.location.search);
+  const provider = params.get('provider') ?? '';
+  const seriesId = params.get('id') ?? '';
+  const anilistId = params.get('anilistId') ?? '';
+  const title = params.get('title') ?? 'Аниме от доставчик';
+  const poster = params.get('image') ?? '';
+  const returnLink = document.querySelector<HTMLAnchorElement>('[data-return-link]');
+  const titleNode = document.querySelector<HTMLElement>('[data-anime-title]')!;
+  const providerNode = document.querySelector<HTMLElement>('[data-anime-provider]')!;
+  const metaNode = document.querySelector<HTMLElement>('[data-anime-meta]')!;
+  const posterNode = document.querySelector<HTMLImageElement>('[data-anime-poster]')!;
+  const countNode = document.querySelector<HTMLElement>('[data-episode-count]')!;
+  const episodeList = document.querySelector<HTMLElement>('[data-episode-list]')!;
+
+  titleNode.textContent = title;
+  providerNode.textContent = provider.toUpperCase();
+  document.title = `${title} — Епизоди`;
+  if (returnLink && params.has('returnTo')) {
+    try {
+      const destination = new URL(params.get('returnTo')!, window.location.origin);
+      if (destination.origin === window.location.origin && destination.pathname === '/') returnLink.href = `${destination.pathname}${destination.search}${destination.hash}`;
+    } catch { /* Keep the default discovery link. */ }
+  }
+  if (poster) {
+    try {
+      const imageUrl = new URL(poster);
+      if (imageUrl.protocol === 'https:' || imageUrl.protocol === 'http:') {
+        posterNode.src = imageUrl.href;
+        posterNode.alt = `Постер на ${title}`;
+        posterNode.hidden = false;
+        posterNode.addEventListener('error', () => { posterNode.hidden = true; }, { once: true });
+      }
+    } catch { /* Ignore malformed poster URLs. */ }
+  }
+
+  const showSource = (episodeId: string, button: HTMLButtonElement, detail: HTMLElement) => {
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      detail.textContent = 'Проверка…';
+      try {
+        const result = await getEpisodeStreams(provider, episodeId);
+        const sources = result.sources ?? [];
+        detail.textContent = sources.length
+          ? sources.map(source => `${({ hls: 'HLS', dash: 'DASH', mp4: 'MP4', unsupported: 'Неподдържан формат' } as const)[getSourceKind(source)]}${source.quality ? ` · ${source.quality}` : ''}`).join(', ')
+          : 'Няма налични източници.';
+      } catch (error) {
+        detail.textContent = error instanceof ConsumetError ? error.message : 'Резолюцията е неуспешна.';
+      } finally { button.disabled = false; }
+    });
+  };
+
+  const loadEpisodes = async () => {
+    if (!provider || !seriesId) {
+      episodeList.replaceChildren();
+      const error = document.createElement('p'); error.className = 'search-message search-error'; error.textContent = 'Липсва информация за това заглавие.'; episodeList.append(error);
+      return;
+    }
+    try {
+      const info = await getProviderAnime(provider, seriesId);
+      const episodes = [...(info.episodes ?? [])].sort((a, b) => a.number - b.number);
+      episodeList.replaceChildren();
+      countNode.textContent = `${episodes.length} ЕПИЗОДА`;
+      metaNode.textContent = `${episodes.length} епизода · избери кой да гледаш`;
+      if (!episodes.length) {
+        const empty = document.createElement('p'); empty.className = 'search-message'; empty.textContent = 'Този доставчик не върна епизоди.'; episodeList.append(empty);
+        return;
+      }
+      for (const episode of episodes) {
+        const row = document.createElement('article'); row.className = 'provider-episode-card';
+        const number = document.createElement('span'); number.className = 'provider-episode-number'; number.textContent = String(episode.number).padStart(2, '0');
+        const info = document.createElement('div'); info.className = 'provider-episode-info';
+        const heading = document.createElement('h3'); heading.textContent = episode.title || `Епизод ${episode.number}`;
+        const subheading = document.createElement('p'); subheading.textContent = `Епизод ${episode.number}`;
+        info.append(heading, subheading);
+        const actions = document.createElement('div'); actions.className = 'provider-episode-actions';
+        if (provider === 'anikoto') {
+          const watchParams = new URLSearchParams({ provider, animeId: seriesId, episodeId: episode.id, number: String(episode.number), title, ...(anilistId ? { anilistId } : {}) });
+          const watch = document.createElement('a'); watch.className = 'button-primary provider-watch-button'; watch.href = `/provider-watch?${watchParams}`; watch.textContent = 'Гледай';
+          actions.append(watch);
+        }
+        const sourceButton = document.createElement('button'); sourceButton.className = 'episode-source-button'; sourceButton.type = 'button'; sourceButton.textContent = 'Източници';
+        const sourceInfo = document.createElement('span'); sourceInfo.className = 'source-info';
+        showSource(episode.id, sourceButton, sourceInfo);
+        actions.append(sourceButton);
+        row.append(number, info, actions);
+        if (sourceInfo) row.append(sourceInfo);
+        episodeList.append(row);
+      }
+    } catch (error) {
+      episodeList.replaceChildren();
+      const message = document.createElement('p'); message.className = 'search-message search-error';
+      message.textContent = error instanceof ConsumetError ? error.message : 'Епизодите не можаха да се заредят.';
+      episodeList.append(message);
+    }
+  };
+
+  void loadEpisodes();
+</script>

@@ -12,7 +12,7 @@ CREATE TABLE titles(
   romaji TEXT, english TEXT, native TEXT,
   title_bg TEXT, synopsis_bg TEXT, year INTEGER, format TEXT,
   episodes INTEGER, cover TEXT, banner TEXT, status TEXT, score REAL,
-  season TEXT
+  season TEXT, genres TEXT NOT NULL DEFAULT '[]', tags TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE episodes(
   title_id INTEGER NOT NULL REFERENCES titles(id),
@@ -29,8 +29,11 @@ CREATE TABLE subs(
   PRIMARY KEY (title_id, number)
 );
 `);
-const query = `query ($id: Int) { Media(id: $id, type: ANIME) { id siteUrl title { romaji english native } coverImage { extraLarge } bannerImage episodes format seasonYear averageScore status season description(asHtml: false) } }`;
-const insertTitle = db.prepare(`INSERT OR REPLACE INTO titles(id,slug,romaji,english,native,title_bg,synopsis_bg,year,format,episodes,cover,banner,status,score,season) VALUES (@id,@slug,@romaji,@english,@native,NULL,NULL,@year,@format,@episodes,@cover,@banner,@status,@score,@season)`);
+const columns = new Set((db.pragma('table_info(titles)') as Array<{ name: string }>).map(column => column.name));
+if (!columns.has('genres')) db.exec("ALTER TABLE titles ADD COLUMN genres TEXT NOT NULL DEFAULT '[]'");
+if (!columns.has('tags')) db.exec("ALTER TABLE titles ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'");
+const query = `query ($id: Int) { Media(id: $id, type: ANIME) { id siteUrl title { romaji english native } coverImage { extraLarge } bannerImage episodes format seasonYear averageScore status season genres tags { name category } description(asHtml: false) } }`;
+const insertTitle = db.prepare(`INSERT OR REPLACE INTO titles(id,slug,romaji,english,native,title_bg,synopsis_bg,year,format,episodes,cover,banner,status,score,season,genres,tags) VALUES (@id,@slug,@romaji,@english,@native,NULL,NULL,@year,@format,@episodes,@cover,@banner,@status,@score,@season,@genres,@tags)`);
 const clearEpisodes = db.prepare('DELETE FROM episodes WHERE title_id = ?');
 const insertEpisode = db.prepare('INSERT OR REPLACE INTO episodes(title_id,number,filler) VALUES (?,?,0)');
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -60,7 +63,7 @@ for (const id of ids) {
   insertTitle.run({ id, slug, romaji: media.title.romaji, english: media.title.english, native: media.title.native,
     year: media.seasonYear, format: media.format, episodes: episodeCount, cover: media.coverImage?.extraLarge,
     banner: media.bannerImage, status: media.status, score: media.averageScore == null ? null : media.averageScore / 10,
-    season: media.season });
+    season: media.season, genres: JSON.stringify(media.genres ?? []), tags: JSON.stringify(media.tags?.map(tag => tag.name) ?? []) });
   const insertAll = db.transaction(() => { for (let n = 1; n <= episodeCount; n++) insertEpisode.run(id, n); });
   insertAll();
   console.log(`Imported ${id} as ${slug} (${episodeCount} episodes)`);
@@ -72,5 +75,5 @@ interface AniMedia {
   id: number; siteUrl: string; title: { romaji: string | null; english: string | null; native: string | null };
   coverImage?: { extraLarge?: string }; bannerImage?: string | null; episodes?: number | null;
   format?: string | null; seasonYear?: number | null; averageScore?: number | null; status?: string | null;
-  season?: string | null; description?: string | null;
+  season?: string | null; description?: string | null; genres?: string[]; tags?: Array<{ name: string; category: string }>;
 }

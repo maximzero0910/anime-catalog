@@ -1,4 +1,12 @@
-export interface ConsumetSearchResult { id: string; title: string | { english?: string; romaji?: string; native?: string }; image?: string; cover?: string; releaseDate?: string; type?: string; }
+import type { CatalogFilters } from './catalog-filters';
+
+export interface ConsumetSearchResult {
+  id: string;
+  title: string | { english?: string; romaji?: string; native?: string };
+  image?: string; cover?: string; releaseDate?: string; type?: string; genres?: string[];
+  tags?: string[]; year?: number; releaseTimestamp?: number; season?: string; status?: string; rating?: number;
+  popularity?: number; animeType?: string; format?: string; anilistId?: number;
+}
 export interface ConsumetEpisode { id: string; number: number; title?: string; url?: string; }
 export interface ConsumetSource { url: string; isM3U8?: boolean; quality?: string; type?: string; }
 export interface ConsumetAnimeInfo { id: string; title: string; image?: string; description?: string; episodes?: ConsumetEpisode[]; }
@@ -11,35 +19,55 @@ export class ConsumetError extends Error {
   }
 }
 
-const apiBase = ['localhost', '127.0.0.1'].includes(window.location.hostname) ? '/api' : 'https://cdn.example.com/api';
+const isLocal = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+const apiBase = isLocal ? '/api' : 'https://cdn.example.com/api';
 
-async function request<T>(path: string): Promise<T> {
+async function request<T>(path: string, options: { signal?: AbortSignal; direct?: boolean } = {}): Promise<T> {
   let response: Response;
-  try { response = await fetch(`${apiBase}${path}`); }
+  const base = options.direct ? '/api' : apiBase;
+  try { response = await fetch(`${base}${path}`, { signal: options.signal }); }
   catch { throw new ConsumetError('Worker API не е достъпен. Стартирай Wrangler на порт 8787.', 0); }
   const body = await response.json().catch(() => ({})) as ConsumetErrorPayload & T;
   if (!response.ok) throw new ConsumetError(body.diagnostic ?? body.error ?? `Consumet върна HTTP ${response.status}`, response.status, body);
   return body;
 }
 
-export const searchProvider = (provider: string, query: string) =>
+export const searchProvider = (provider: string, query: string, signal?: AbortSignal) =>
   provider === 'anikoto'
-    ? request<{ results?: ConsumetSearchResult[] }>(`/provider-catalog?${new URLSearchParams({ provider, action: 'search', q: query })}`)
-    : request<{ results?: ConsumetSearchResult[] }>(`/anime/${encodeURIComponent(provider)}/${encodeURIComponent(query)}`);
+    ? request<{ results?: ConsumetSearchResult[] }>(`/provider-catalog?${new URLSearchParams({ provider, action: 'search', q: query })}`, { signal, direct: true })
+    : request<{ results?: ConsumetSearchResult[] }>(`/anime/${encodeURIComponent(provider)}/${encodeURIComponent(query)}`, { signal });
 export const getProviderAnime = (provider: string, id: string) =>
   provider === 'anikoto'
-    ? request<ConsumetAnimeInfo>(`/provider-catalog?${new URLSearchParams({ provider, action: 'info', id })}`)
+    ? request<ConsumetAnimeInfo>(`/provider-catalog?${new URLSearchParams({ provider, action: 'info', id })}`, { direct: true })
     : request<ConsumetAnimeInfo>(`/anime/${encodeURIComponent(provider)}/info?id=${encodeURIComponent(id)}`);
 export async function getEpisodeStreams(provider: string, episodeId: string) {
   if (provider === 'anikoto') {
     const query = new URLSearchParams({ provider, episodeId, audio: 'sub' });
-    const source = await request<{ url: string; type: string; quality: string; subtitles?: Array<{ url: string; lang?: string }> }>(`/provider-stream?${query}`);
+    const source = await request<{ url: string; type: string; quality: string; subtitles?: Array<{ url: string; lang?: string }> }>(`/provider-stream?${query}`, { direct: true });
     return {
       sources: [{ url: source.url, isM3U8: source.type === 'hls', quality: source.quality, type: source.type }],
       subtitles: source.subtitles ?? [],
     };
   }
   return request<{ sources?: ConsumetSource[]; subtitles?: Array<{ url: string; lang?: string }> }>(`/anime/${encodeURIComponent(provider)}/watch/${encodeURIComponent(episodeId)}`);
+}
+
+export async function filterProviderResults(
+  provider: string,
+  query: string,
+  results: ConsumetSearchResult[],
+  filters: CatalogFilters,
+  signal?: AbortSignal,
+): Promise<{ results: ConsumetSearchResult[] }> {
+  const response = await fetch('/api/provider-catalog?action=filter', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ provider, query, results, filters }),
+    signal,
+  });
+  const body = await response.json().catch(() => ({})) as ConsumetErrorPayload & { results?: ConsumetSearchResult[] };
+  if (!response.ok) throw new ConsumetError(body.diagnostic ?? body.error ?? `Филтрирането върна HTTP ${response.status}`, response.status, body);
+  return { results: body.results ?? [] };
 }
 
 export function getSourceKind(source: ConsumetSource): 'hls' | 'dash' | 'mp4' | 'unsupported' {
@@ -50,3 +78,4 @@ export function getSourceKind(source: ConsumetSource): 'hls' | 'dash' | 'mp4' | 
   if (url.endsWith('.mp4') || type.includes('mp4')) return 'mp4';
   return 'unsupported';
 }
+
