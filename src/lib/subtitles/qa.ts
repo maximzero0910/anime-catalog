@@ -42,5 +42,9 @@ export function validateTranslation(source: NormalizedSubtitle, translated: Norm
   if (untranslated > Math.max(2, Math.ceil(source.cues.length * 0.08))) issues.push(`untranslated-lines:${untranslated}`);
   if (suspiciousLength > Math.max(1, Math.ceil(source.cues.length * 0.05))) issues.push(`implausible-length-ratio:${suspiciousLength}`);
   const score = Math.max(0, Math.min(1, 1 - issues.length / Math.max(5, source.cues.length * 0.12)));
-  return { valid: issues.length === 0, score, issues };
+  const latinFragmentCount = issues.filter(issue => issue.startsWith('untranslated-latin-fragment:')).length;
+  const latinFragmentRatio = latinFragmentCount / Math.max(1, source.cues.length);
+  // DECISION: retain per-cue warnings, but don't discard an otherwise sound episode for a few borrowed names or phrases; provider-level Cyrillic checks and the existing episode score still reject predominantly untranslated output.
+  const hasHardFailure = issues.some(issue => !issue.startsWith('untranslated-latin-fragment:'));
+  return { valid: !hasHardFailure && latinFragmentRatio <= 0.02, score, issues };
 }

@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { subtitleConfig } from '../config';
 import { persistSubtitleProviderState, subtitleProviderStates } from '../storage';
-import { translateBatch } from '../inference';
 
 export type SubtitleFormat = 'srt' | 'vtt';
 export type Provider = {
@@ -13,7 +12,7 @@ export type Provider = {
   translate(input: { srt: string; sourceLang: string; targetLang: string }, signal: AbortSignal): Promise<string>;
   health(): { ok: boolean; cooldownUntil: number };
 };
-export type ProviderFailureKind = 'network' | 'blocked' | 'empty' | 'parse' | 'timeout' | 'rate-limit' | 'unavailable' | 'validation';
+export type ProviderFailureKind = 'network' | 'blocked' | 'empty' | 'parse' | 'timeout' | 'rate-limit' | 'unavailable' | 'validation' | 'quality';
 export class ProviderError extends Error {
   constructor(readonly provider: string, readonly kind: ProviderFailureKind, message: string) { super(message); this.name = 'ProviderError'; }
 }
@@ -22,6 +21,7 @@ interface SrtCue { id: string; start: string; end: string; text: string; }
 interface SrtDocument { format: SubtitleFormat; header: string; cues: SrtCue[]; }
 interface ProviderMetrics { attempts: number; successes: number; failures: number; consecutiveFailures: number; cooldownUntil: number; disabledThisRun: boolean; lastLatencyMs: number | null; lastError: string | null; lastStatus: number | null; }
 const registrations = new Map<string, Provider>();
+export const translationProviders = registrations;
 const runId = `${process.pid}:${Date.now()}`;
 const savedStates = subtitleProviderStates();
 const metrics = new Map<string, ProviderMetrics>();
@@ -56,6 +56,16 @@ export function isOpen(id: string): boolean {
   const health = provider.health();
   return !health.ok || health.cooldownUntil > Date.now() || providerState(id).disabledThisRun;
 }
+export function nextProviderAvailableAt(now = Date.now()): number | null {
+  const times = ordered().map(provider => {
+    const health = provider.health();
+    const state = providerState(provider.id);
+    if (!health.ok || state.disabledThisRun) return null;
+    const availableAt = Math.max(health.cooldownUntil, state.cooldownUntil);
+    return availableAt > now ? availableAt : now;
+  }).filter((value): value is number => value !== null);
+  return times.length ? Math.min(...times) : null;
+}
 export function recordSuccess(id: string, latencyMs = 0, status: number | null = 200): void {
   const state = providerState(id);
   state.attempts++; state.successes++; state.consecutiveFailures = 0; state.lastLatencyMs = Math.max(0, latencyMs); state.lastError = null; state.lastStatus = status;
@@ -68,11 +78,15 @@ export function recordFailure(id: string, reason: string, latencyMs = 0, status:
   if (state.consecutiveFailures >= 3) state.disabledThisRun = true;
   persistState(id);
 }
+export function recordQualityRejection(id: string, reason: string, latencyMs = 0): void {
+  const state = providerState(id);
+  state.attempts++; state.failures++; state.lastLatencyMs = Math.max(0, latencyMs); state.lastError = reason.slice(0, 500); state.lastStatus = null;
+  // A usable HTTP response with imperfect translation is not a provider outage.
+  persistState(id);
+}
 export function ordered(): Provider[] {
-  const configured = [...new Set(subtitleConfig.providerOrder)].filter(id => id !== 'local');
+  const configured = [...new Set(subtitleConfig.providerOrder)];
   const result = configured.map(id => registrations.get(id)).filter((provider): provider is Provider => Boolean(provider));
-  const local = registrations.get('local');
-  if (local) result.push(local);
   return result;
 }
 export function providerStatus(): Array<Record<string, unknown>> {
@@ -91,7 +105,7 @@ export function providerStatus(): Array<Record<string, unknown>> {
   return ordered().map(provider => {
     const state = providerState(provider.id);
     const healthy = provider.health();
-    const configured = provider.id === 'local' || subtitleConfig.providerOrder.includes(provider.id);
+    const configured = subtitleConfig.providerOrder.includes(provider.id);
     return {
       id: provider.id, kind: provider.kind, enabled: configured && healthy.ok && !state.disabledThisRun,
       cooldownUntil: Math.max(healthy.cooldownUntil, state.cooldownUntil), cooldownRemainingMs: Math.max(0, Math.max(healthy.cooldownUntil, state.cooldownUntil) - Date.now()),
@@ -236,6 +250,8 @@ async function waitForProviderToken(provider: Provider, signal: AbortSignal): Pr
   });
 }
 async function invokeProvider(provider: Provider, input: { srt: string; sourceLang: string; targetLang: string }, outerSignal: AbortSignal): Promise<{ text: string; latencyMs: number }> {
+  // Rate-limit waits must not occupy a scarce global network slot.
+  await waitForProviderToken(provider, outerSignal);
   const release = await acquireGlobalSlot(outerSignal);
   const started = Date.now();
   const controller = new AbortController();
@@ -243,7 +259,6 @@ async function invokeProvider(provider: Provider, input: { srt: string; sourceLa
   outerSignal.addEventListener('abort', abort, { once: true });
   const timer = setTimeout(() => controller.abort(new Error('provider attempt timed out')), subtitleConfig.providerTimeoutMs);
   try {
-    await waitForProviderToken(provider, controller.signal);
     const text = await provider.translate(input, controller.signal);
     return { text, latencyMs: Date.now() - started };
   } catch (error) {
@@ -263,14 +278,12 @@ export async function translateWithProvider(provider: Provider, srt: string, sou
   const document = parseSrt(srt, provider.id);
   if (document.cues.length > provider.maxCues && provider.maxCues < 2) throw new ProviderError(provider.id, 'validation', `provider cue ceiling ${provider.maxCues} is too small for overlap batching`);
   const output: SrtCue[] = [];
-  let totalLatencyMs = 0;
   for (const batch of chunkForProvider(document, provider)) {
     const stripped = batch.map(cue => stripTags(cue.text));
     const cleanBatch = batch.map((cue, index) => ({ ...cue, start: cue.start.replace('.', ','), end: cue.end.replace('.', ','), text: stripped[index]!.text }));
     const requestDoc: SrtDocument = { format: 'srt', header: '', cues: cleanBatch };
     const request = serializeSrt(requestDoc, cleanBatch);
-    const { text, latencyMs } = await invokeProvider(provider, { srt: request, sourceLang, targetLang }, signal);
-    totalLatencyMs += latencyMs;
+    const { text } = await invokeProvider(provider, { srt: request, sourceLang, targetLang }, signal);
     const response = parseSrt(text, provider.id);
     assertProviderOutput(provider, cleanBatch, response);
     const isOverlap = output.length > 0;
@@ -283,7 +296,6 @@ export async function translateWithProvider(provider: Provider, srt: string, sou
   }
   if (output.length !== document.cues.length) throw new ProviderError(provider.id, 'validation', `merged cue count mismatch: input=${document.cues.length}, output=${output.length}`);
   assertBulgarianOutput(provider, output);
-  recordSuccess(provider.id, totalLatencyMs);
   return { srt: serializeSrt(document, output), cueCount: output.length };
 }
 
@@ -352,28 +364,17 @@ const subtitlesTranslator: Provider = {
   async translate() { throw new ProviderError(this.id, 'unavailable', 'browser UI upload worked, but translation stalled at 100% and emitted no translated result'); },
   health: () => ({ ok: false, cooldownUntil: 0 }),
 };
-const localProvider: Provider = {
-  id: 'local', kind: 'http', accepts: ['srt', 'vtt'], maxBytes: 10_000_000, maxCues: 40,
-  async translate(input) {
-    const { document, texts } = providerInput(input.srt, this.id);
-    const result = await translateBatch(input.sourceLang as 'en' | 'ja', texts.map((text, index) => ({ id: String(index + 1), text, speaker: null })), [], []);
-    return withTranslations(this.id, input.srt, result.translations.map(item => item.text));
-  },
-  health: () => ({ ok: true, cooldownUntil: 0 }),
-};
-
 register(widgetProvider('translatesubtitles-co', 'https://translatesubtitles.co/'));
 register(widgetProvider('translate-subtitles-com', 'https://translate-subtitles.com/'));
 register(widgetProvider('syedgakbar', 'https://www.syedgakbar.com/'));
 register(editsub);
 register(subtitlesTranslator);
-register(localProvider);
 
 export interface ProviderTranslateResult { providerId: string; srt: string; cacheHit: boolean; latencyMs: number; }
 export async function translateThroughProviders(input: { srt: string; sourceLang: string; targetLang: string }, options: {
   signal?: AbortSignal; totalBudgetMs?: number; getCached?: (providerId: string) => Promise<string | undefined>;
   onSuccess?: (providerId: string, srt: string, latencyMs: number, cacheHit: boolean) => Promise<void>;
-  onFailure?: (providerId: string, reason: string) => void; localFallback?: (signal: AbortSignal) => Promise<string>;
+  onFailure?: (providerId: string, reason: string) => void;
 } = {}): Promise<ProviderTranslateResult> {
   const controller = new AbortController();
   const parentAbort = () => controller.abort(options.signal?.reason);
@@ -390,11 +391,6 @@ export async function translateThroughProviders(input: { srt: string; sourceLang
         break;
       }
       if (isOpen(provider.id)) continue;
-      if (provider.id === 'local' && options.localFallback) {
-        const localSrt = await options.localFallback(controller.signal);
-        return { providerId: 'local', srt: localSrt, cacheHit: false, latencyMs: Date.now() - started };
-      }
-      if (provider.id === 'local') continue;
       const cached = await options.getCached?.(provider.id);
       if (cached) {
         await options.onSuccess?.(provider.id, cached, 0, true);
@@ -405,18 +401,13 @@ export async function translateThroughProviders(input: { srt: string; sourceLang
         const result = await translateWithProvider(provider, input.srt, input.sourceLang, input.targetLang, controller.signal);
         const elapsed = Date.now() - attemptStarted;
         await options.onSuccess?.(provider.id, result.srt, elapsed, false);
+        recordSuccess(provider.id, elapsed);
         return { providerId: provider.id, srt: result.srt, cacheHit: false, latencyMs: elapsed };
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        recordFailure(provider.id, reason, Date.now() - attemptStarted);
+        if (error instanceof ProviderError && error.kind === 'quality') recordQualityRejection(provider.id, reason, Date.now() - attemptStarted);
+        else recordFailure(provider.id, reason, Date.now() - attemptStarted);
         options.onFailure?.(provider.id, reason);
-      }
-    }
-    if (options.localFallback && !controller.signal.aborted) {
-      const local = registrations.get('local');
-      if (local && !isOpen(local.id)) {
-        const localSrt = await options.localFallback(controller.signal);
-        return { providerId: 'local', srt: localSrt, cacheHit: false, latencyMs: Date.now() - started };
       }
     }
     throw new ProviderError('chain', 'empty', 'all subtitle providers were exhausted');

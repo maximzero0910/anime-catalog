@@ -11,6 +11,7 @@
     "build:index": "node --import tsx tools/build-index.ts",
     "provider:sync": "node --import tsx tools/sync-provider-map.ts",
     "test:e2e": "node --import tsx --test tools/e2e.test.ts",
+    "test:proxy": "node --import tsx --test src/lib/tests/hls-proxy.test.ts worker/tests/proxy.test.ts",
     "subtitles:worker": "node --import tsx tools/subtitles-worker.ts",
     "subtitles:index": "node --import tsx tools/subtitles-indexer.ts --watch",
     "subtitles:index:seed": "node --import tsx tools/subtitles-indexer.ts --seed",
@@ -24,11 +25,12 @@
     "deploy:worker": "wrangler deploy"
   },
   "dependencies": {
-    "@astrojs/node": "^9.5.5",
-    "astro": "^5.0.0",
+    "@astrojs/node": "^11.1.13",
+    "astro": "^7.4.12",
     "hls.js": "^1.5.17",
     "impit": "^0.14.9",
     "input": "^1.0.1",
+    "ipaddr.js": "^2.5.0",
     "telegram": "^2.26.22",
     "undici": "^8.12.4",
     "vidstack": "^1.12.13"
@@ -44,5 +46,8 @@
   },
   "allowScripts": {
     "better-sqlite3@13.2.0": true
+  },
+  "overrides": {
+    "esbuild": "^0.28.2"
   }
 }

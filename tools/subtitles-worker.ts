@@ -1,11 +1,10 @@
-import { freemem, totalmem } from 'node:os';
-import { discoverTracks, downloadTrack, type SubtitleTrack } from '../src/lib/subtitles/acquire';
+import { discoverTracks, downloadTrack, resolveSubtitleSource, type SubtitleTrack } from '../src/lib/subtitles/acquire';
 import { subtitleConfig } from '../src/lib/subtitles/config';
-import { availableModels, modelCoverage } from '../src/lib/subtitles/inference';
 import { parseSubtitle } from '../src/lib/subtitles/normalize';
-import { addDeadLetter, claimJobs, claimUndiscoveredJobs, existingBulgarian, getJob, heartbeatJob, logJob, persistModelStatus, readBody, recordWorkerHeartbeat, recoverStaleJobs, saveBody, setWorkerControl, storeValidatedArtifact, updateJob, workerConcurrency, workerControl, type Job } from '../src/lib/subtitles/storage';
+import { addDeadLetter, claimJobs, claimUndiscoveredJobs, existingBulgarian, getJob, heartbeatJob, logJob, readBody, recordWorkerHeartbeat, recoverStaleJobs, saveBody, saveSubtitleHardsub, setWorkerControl, skipJobForNoSubtitleSource, storeValidatedArtifact, updateJob, workerConcurrency, workerControl, type Job } from '../src/lib/subtitles/storage';
 import { enqueueEligible } from '../src/lib/subtitles/queue';
 import { SubtitleWorkerPause, SubtitleWorkerStop, translateSubtitleJob } from '../src/lib/subtitles/translate';
+import { nextProviderAvailableAt } from '../src/lib/subtitles/providers';
 
 const args = process.argv.slice(2);
 const option = (name: string) => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : undefined; };
@@ -31,18 +30,48 @@ async function saveNativeTrack(job: Job, track: SubtitleTrack, text: string): Pr
 async function discoverQueuedJob(job: Job): Promise<void> {
   try {
     if (existingBulgarian(job.anime_id, Number(job.episode_id))) { updateJob(job.id, 'SKIPPED', { error: 'Validated Bulgarian subtitle already exists' }); return; }
-    const tracks = await discoverTracks(job.anime_id, Number(job.episode_id));
+    const candidates = await resolveSubtitleSource(job.anime_id, Number(job.episode_id));
+    const hardsub = candidates.find(candidate => candidate.kind === 'hardsub');
+    const tracks: SubtitleTrack[] = candidates.filter(candidate => candidate.kind === 'file' && candidate.url).map(candidate => ({ language: candidate.language ?? 'bg', url: candidate.url, format: candidate.format ?? 'srt', provider: candidate.sourceId, headers: {}, attribution: candidate.attribution, fetch: candidate.fetch }));
+    if (hardsub) {
+      saveSubtitleHardsub({ animeId: job.anime_id, episode: Number(job.episode_id), sourceId: hardsub.sourceId, sourceTitle: hardsub.title, sourceUrl: hardsub.url });
+      logJob(job.id, 'info', 'hardsub_detected_no_ocr', { source: hardsub.sourceId, title: hardsub.title });
+      if (!tracks.some(track => track.language === 'bg')) {
+        updateJob(job.id, 'SKIPPED', { providerId: hardsub.sourceId, error: `Bulgarian hardsub available at ${hardsub.sourceId}; OCR is disabled` });
+        return;
+      }
+    }
     for (const bulgarian of tracks.filter(track => track.language === 'bg')) {
       try { const result = await downloadTrack(bulgarian); parseSubtitle(result.text, result.track.format); await saveNativeTrack(job, bulgarian, result.text); return; }
       catch (error) { logJob(job.id, 'warn', 'bulgarian_track_unusable', { provider: bulgarian.provider, reason: error instanceof Error ? error.message : String(error) }); }
     }
     const sources = [...tracks.filter(track => track.language === 'en'), ...tracks.filter(track => track.language === 'ja')];
-    const source = sources[0];
-    if (!source) throw new Error('No usable Bulgarian, English, or Japanese subtitle track was exposed by available providers');
-    updateJob(job.id, 'QUEUED', { sourceLanguage: languageOf(source), providerId: source.provider, checkpoint: { ...job.checkpoint, sourceTrack: source, sourceTracks: sources }, lockedAt: null });
+    let source: SubtitleTrack | undefined;
+    let storedSource: Awaited<ReturnType<typeof saveBody>> | undefined;
+    let parsedSource: ReturnType<typeof parseSubtitle> | undefined;
+    let sourceText = '';
+    for (const candidate of sources) {
+      try {
+        const downloaded = await downloadTrack(candidate);
+        const parsed = parseSubtitle(downloaded.text, downloaded.track.format);
+        const stored = await saveBody(downloaded.text, parsed.format);
+        source = { ...candidate, format: parsed.format, fetch: undefined };
+        storedSource = stored; parsedSource = parsed; sourceText = downloaded.text;
+        break;
+      } catch (error) { logJob(job.id, 'warn', 'source_track_unusable', { provider: candidate.provider, language: candidate.language, reason: error instanceof Error ? error.message : String(error) }); }
+    }
+    if (!source || !storedSource || !parsedSource) {
+      skipJobForNoSubtitleSource(job.id);
+      return;
+    }
+    updateJob(job.id, 'QUEUED', { sourceLanguage: languageOf(source), providerId: source.provider, sourceHash: parsedSource.sourceHash, checkpoint: { ...job.checkpoint, sourcePath: storedSource.path, sourceHash: parsedSource.sourceHash, sourceLanguage: languageOf(source), sourceFormat: parsedSource.format, providerId: source.provider }, lockedAt: null });
     logJob(job.id, 'info', 'tracks_discovered', { provider: source.provider, sourceLanguage: source.language, availableLanguages: [...new Set(tracks.map(track => track.language))], candidateCount: sources.length });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
+    if (/^no subtitle source$/i.test(reason)) {
+      skipJobForNoSubtitleSource(job.id, reason);
+      return;
+    }
     const latest = getJob(job.id)!; const terminal = latest.attempts >= subtitleConfig.retryCount + 3;
     const backoff = Math.min(60 * 60_000, subtitleConfig.retryDelayMs * (2 ** Math.max(0, latest.attempts - 1)) * Math.random());
     updateJob(job.id, 'FAILED', { error: reason, availableAt: terminal ? Number.MAX_SAFE_INTEGER : Date.now() + backoff, lockedAt: null });
@@ -119,10 +148,13 @@ async function runJob(job: Job): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     const latest = getJob(job.id)!;
     const maximumAttempts = subtitleConfig.retryCount + 3;
-    const terminal = latest.attempts >= maximumAttempts;
+    const providerReadyAt = nextProviderAvailableAt();
+    const cooldownWait = message.includes('all providers are cooling down') && providerReadyAt !== null;
+    const terminal = latest.attempts >= maximumAttempts && !cooldownWait;
     const backoff = Math.min(60 * 60_000, subtitleConfig.retryDelayMs * (2 ** Math.max(0, latest.attempts - 1)) * Math.random());
-    updateJob(job.id, 'FAILED', { error: message, availableAt: terminal ? Number.MAX_SAFE_INTEGER : Date.now() + backoff, lockedAt: null });
-    logJob(job.id, 'error', terminal ? 'dead_lettered' : 'attempt_failed', { attempts: latest.attempts, retryInMs: terminal ? 0 : backoff, reason: message });
+    const retryInMs = terminal ? 0 : Math.max(backoff, providerReadyAt === null ? 0 : providerReadyAt - Date.now());
+    updateJob(job.id, 'FAILED', { error: message, availableAt: terminal ? Number.MAX_SAFE_INTEGER : Date.now() + retryInMs, lockedAt: null, ...(cooldownWait ? { attempts: Math.max(0, latest.attempts - 1) } : {}) });
+    logJob(job.id, 'error', terminal ? 'dead_lettered' : 'attempt_failed', { attempts: latest.attempts, retryInMs, reason: message, providerCooldownWait: cooldownWait });
     if (terminal) addDeadLetter(latest, message);
     console.error(`FAILED job=${job.id} anime=${job.anime_id} ep=${job.episode_id}: ${message}${terminal ? ' (dead-letter)' : ''}`);
   } finally { clearInterval(heartbeat); }
@@ -130,30 +162,16 @@ async function runJob(job: Job): Promise<void> {
 
 async function main(): Promise<void> {
   if (args.includes('--enqueue') || args.length === 0) console.log(`Queue result: ${JSON.stringify(enqueueEligible({ animeIds: selectedAnime, cap }))}`);
-  if (args.includes('--models')) { const coverage = await modelCoverage(true); persistModelStatus(coverage as unknown as Record<string, unknown>); console.log(JSON.stringify(coverage, null, 2)); return; }
+  if (args.includes('--models')) { console.error('Local inference was removed from the subtitle worker; translations use configured online providers.'); process.exitCode = 2; return; }
   if (args.includes('--enqueue-only')) return;
   const recovered = recoverStaleJobs(subtitleConfig.staleLockMs);
   if (recovered) console.log(`Recovered ${recovered} stale jobs.`);
-  const availableRam = freemem() / totalmem();
-  if (availableRam < 1 - subtitleConfig.ramCeiling) throw new Error(`RAM headroom ${Math.round(availableRam * 100)}% is below the configured safety margin`);
   if (workerControl() === 'paused') console.log('Worker is paused; resume it from /admin/subtitles or the admin API.');
-  const models = await availableModels().catch(error => {
-    console.warn(`Local model inventory unavailable; remote subtitle providers will still run: ${error instanceof Error ? error.message : String(error)}`);
-    return [];
-  });
-  const selectedModel = subtitleConfig.model || [...models].sort((a, b) => (b.size ?? 0) - (a.size ?? 0))[0]?.name || null;
-  persistModelStatus({ activeModel: selectedModel, models });
-  console.log(`Worker active: maxConcurrency=${workerConcurrency()}, batchSize=${subtitleConfig.batchSize}, context=${subtitleConfig.contextWindow}, queueCap=${cap}`);
+  console.log(`Online subtitle worker active: maxConcurrency=${workerConcurrency()}, providers=${subtitleConfig.providerOrder.join(',')}, queueCap=${cap}`);
   while (!stopping && workerControl() !== 'stopping') {
     const newlyRecovered = recoverStaleJobs(subtitleConfig.staleLockMs);
     if (newlyRecovered) console.warn(`Recovered ${newlyRecovered} stale subtitle job(s).`);
     if (workerControl() === 'paused') { await new Promise(resolve => setTimeout(resolve, 2000)); continue; }
-    if (freemem() / totalmem() < 1 - subtitleConfig.ramCeiling) {
-      console.warn('RAM safety ceiling reached; pausing new jobs until headroom returns.');
-      if (!watch) break;
-      await new Promise(resolve => setTimeout(resolve, 10000));
-      continue;
-    }
     const undiscovered = claimUndiscoveredJobs(workerConcurrency());
     if (undiscovered.length) { await Promise.all(undiscovered.map(discoverQueuedJob)); continue; }
     const jobs = claimJobs(workerConcurrency());

@@ -6,7 +6,8 @@ import anikoto from './anikoto';
 import telegram from './telegram';
 import playtube from './playtube';
 
-const providers = new Map<string, Provider>();
+export const streamProviders = new Map<string, Provider>();
+const providers = streamProviders;
 const failures = new Map<string, number[]>();
 const openedUntil = new Map<string, number>();
 

@@ -3,8 +3,7 @@ import { promisify } from 'node:util';
 import { freemem, cpus, totalmem } from 'node:os';
 import { getEpisodes, getTitles } from '../../../lib/db';
 import { enqueueEligible } from '../../../lib/subtitles/queue';
-import { availableModels } from '../../../lib/subtitles/inference';
-import { controlJob, deadLetters, getGlossary, jobStats, markSubtitleIndexRejected, markSubtitleIndexVerified, persistedModelStatus, recentJobs, retryFailedJobs, setGlossary, setWorkerConcurrency, setWorkerControl, storedBulgarianCount, subtitleIndexProviderBreakdown, subtitleIndexReviewQueue, subtitleIndexStats, workerConcurrency, workerControl, workerProcessStatus } from '../../../lib/subtitles/storage';
+import { addSubtitleTitleAlias, controlJob, deadLetters, getGlossary, jobStats, markSubtitleIndexRejected, markSubtitleIndexVerified, pendingSubtitleMappings, recentJobs, resolveSubtitleMapping, retryFailedJobs, setGlossary, setWorkerConcurrency, setWorkerControl, storedBulgarianCount, subtitleIndexProviderBreakdown, subtitleIndexReviewQueue, subtitleIndexStats, workerConcurrency, workerControl, workerProcessStatus } from '../../../lib/subtitles/storage';
 import { subtitleConfig } from '../../../lib/subtitles/config';
 
 export const prerender = false;
@@ -37,9 +36,6 @@ export async function GET({ request }: { request: Request }): Promise<Response> 
   const titles = getTitles();
   const eligible = titles.reduce((sum, title) => sum + getEpisodes(title.id).length, 0);
   const stats = jobStats();
-  const models = await availableModels().catch(() => []);
-  const modelStatus = persistedModelStatus();
-  const selectedModel = subtitleConfig.model || [...models].sort((a, b) => (b.size ?? 0) - (a.size ?? 0))[0]?.name || null;
   const requestedAnime = Number(new URL(request.url).searchParams.get('animeId'));
   const counts = (stats.counts ?? {}) as Record<string, number>;
   const payload = {
@@ -57,12 +53,11 @@ export async function GET({ request }: { request: Request }): Promise<Response> 
     activeEpisodeRemainingSeconds: stats.activeEpisodeRemainingSeconds,
     estimatedRemainingSeconds: typeof stats.meanSeconds === 'number' ? stats.meanSeconds * ((counts.QUEUED ?? 0) + (counts.DISCOVERED ?? 0) + (counts.DOWNLOADING ?? 0) + (counts.NORMALIZING ?? 0) + (counts.TRANSLATING ?? 0) + (counts.VALIDATING ?? 0)) / workerConcurrency() : null,
     worker: workerProcessStatus(), workerControl: workerControl(), concurrency: workerConcurrency(), configuredConcurrency: subtitleConfig.maxConcurrentJobs,
-    activeModel: typeof modelStatus?.activeModel === 'string' ? modelStatus.activeModel : selectedModel,
-    models: (modelStatus?.models as unknown[]) ?? models,
     deadLetters: deadLetters(20), jobs: recentJobs(40), resources: await resourceStats(),
     subtitleIndex: subtitleIndexStats(),
     subtitleIndexProviders: subtitleIndexProviderBreakdown(),
     subtitleIndexReview: subtitleIndexReviewQueue(100),
+    needsMapping: pendingSubtitleMappings(100),
     adminControlsEnabled: Boolean(process.env.SUBTITLE_ADMIN_TOKEN) || localAdminRequest(request),
     titles: titles.map(title => ({ id: title.id, name: title.english ?? title.romaji ?? `AniList ${title.id}` })),
     glossary: Number.isSafeInteger(requestedAnime) && requestedAnime > 0 ? getGlossary(requestedAnime) : [],
@@ -108,6 +103,14 @@ export async function POST({ request }: { request: Request }): Promise<Response>
       if (action === 'verify-index') markSubtitleIndexVerified(indexId, evidence);
       else markSubtitleIndexRejected(indexId, evidence);
     } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 }); }
+  } else if (action === 'add-title-alias') {
+    try { addSubtitleTitleAlias(String(body.anilistId ?? ''), String(body.sourceId ?? ''), String(body.sourceTitle ?? '')); }
+    catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
+  } else if (action === 'map-title-candidate' || action === 'reject-title-candidate') {
+    const id = Number(body.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return Response.json({ error: 'invalid-mapping-id' }, { status: 400 });
+    try { resolveSubtitleMapping(id, action === 'map-title-candidate' ? 'map' : 'reject'); }
+    catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 }); }
   } else return Response.json({ error: 'unknown-action' }, { status: 400 });
   return Response.json({ ok: true, worker: workerControl(), concurrency: workerConcurrency() });
 }

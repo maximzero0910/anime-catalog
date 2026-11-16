@@ -9,6 +9,7 @@ const fallback = `https://anitaku.pe/${encodeURIComponent(slug)}-episode-${ep}`;
   <div class="player-loading" data-player-loading role="status" aria-live="polite"><span class="player-spinner" aria-hidden="true"></span><span data-loading-label>Намиране на видео източник…</span></div>
   <button type="button" class="controls-link" data-fallback-toggle hidden>Отвори страницата на доставчика</button>
   <div data-fallback-panel hidden><iframe class="fallback" src={fallback} title={`${title} епизод ${ep}`} allowfullscreen referrerpolicy="no-referrer" loading="lazy"></iframe></div>
+  <div class="source-picker"><button type="button" class="controls-link" data-source-toggle aria-expanded="false">Източник</button><div class="source-options" data-source-options hidden role="listbox" aria-label="Видео източник"></div></div>
   <div class="controls" aria-label="Контроли на плеъра">
     <button type="button" data-action="play" aria-label="Пускане или пауза">▶</button>
     <button type="button" data-action="back" aria-label="Назад 5 секунди">−5с</button>
@@ -17,6 +18,7 @@ const fallback = `https://anitaku.pe/${encodeURIComponent(slug)}-episode-${ep}`;
     <button type="button" data-action="fullscreen">Цял екран</button>
     <label>Качество <select data-quality aria-label="Качество"><option value="-1">Автоматично</option></select></label>
     <label>Субтитри <select data-subtitle-select aria-label="Избор на субтитри"><option value="auto">Автоматично · БГ → налични</option><option value="off">Изключени</option></select></label>
+    <span class="subtitle-offset" aria-label="Отместване на субтитрите"><button type="button" data-subtitle-offset="-250" aria-label="Субтитрите по-рано с 0,25 секунди">−0,25с</button><button type="button" data-subtitle-offset="250" aria-label="Субтитрите по-късно с 0,25 секунди">+0,25с</button></span>
     {previous && <a class="controls-link" href={previous}>Предишен</a>}
     {next && <a class="controls-link" href={next}>Следващ</a>}
   </div>
@@ -27,12 +29,13 @@ import 'vidstack/player';
 import 'vidstack/player/ui';
 import 'vidstack/player/styles/default/theme.css';
 import 'vidstack/player/styles/default/layouts/video.css';
+import { isUsableSubtitleTrackUrl } from '../lib/subtitle-track-url';
 
 interface PlayerPrefs { quality: number; subtitles: boolean; subtitleTrack?: string; }
 const root = document.querySelector<HTMLElement>('[data-player-root]');
 const frame = document.querySelector<HTMLElement>('#video-frame');
 if (root && frame) {
-  const providerWatch = window.location.pathname === '/provider-watch';
+  const providerWatch = window.location.pathname.replace(/\/+$/, '') === '/provider-watch';
   if (providerWatch) {
     const params = new URLSearchParams(window.location.search);
     const title = params.get('title') || 'Аниме от доставчик';
@@ -94,6 +97,7 @@ if (root && frame) {
   let providerSubtitles: Array<{ lang: string; url: string; format: string }> = [];
   let providerReferer = '';
   let streamProvider = '';
+  let subtitleOffsetMs = 0;
   let sourceKind: 'hls' | 'mp4' | 'dash' | 'unsupported' = 'hls';
   let localTrackLoaded = false;
   let catalogOnlySubtitle = false;
@@ -104,6 +108,48 @@ if (root && frame) {
   const savePrefs = () => localStorage.setItem(preferenceKey, JSON.stringify(prefs));
   const fallbackToggle = document.querySelector<HTMLButtonElement>('[data-fallback-toggle]')!;
   const fallbackPanel = document.querySelector<HTMLElement>('[data-fallback-panel]')!;
+  const sourceToggle = document.querySelector<HTMLButtonElement>('[data-source-toggle]')!;
+  const sourceOptions = document.querySelector<HTMLElement>('[data-source-options]')!;
+  if (root.dataset.anilistId === '0') sourceToggle.hidden = true;
+  sourceToggle.addEventListener('click', async () => {
+    const opening = sourceOptions.hidden;
+    sourceOptions.hidden = !opening;
+    sourceToggle.setAttribute('aria-expanded', String(opening));
+    if (!opening || sourceOptions.dataset.loaded === 'true') return;
+    sourceOptions.textContent = 'Търсене на налични източници…';
+    try {
+      const response = await fetch(`/api/provider-options/${encodeURIComponent(root.dataset.anilistId!)}/${encodeURIComponent(root.dataset.ep!)}`, { signal: AbortSignal.timeout(20_000), cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json() as { options?: Array<{ provider: string; label: string; episodeId: string; hardsub?: 'bg' }> };
+      sourceOptions.replaceChildren();
+      const options = data.options ?? [];
+      if (!options.length) { sourceOptions.textContent = 'Няма намерени алтернативни източници за този епизод.'; return; }
+      const query = new URLSearchParams(window.location.search);
+      const readNavigation = (direction: 'previous' | 'next') => {
+        const direct = query.get(`${direction}Url`);
+        if (direct) return direct;
+        const label = direction === 'previous' ? 'Предишен' : 'Следващ';
+        return [...document.querySelectorAll<HTMLAnchorElement>('.controls a')].find(link => link.textContent?.includes(label))?.href ?? '';
+      };
+      for (const option of options) {
+        const button = document.createElement('button');
+        button.type = 'button'; button.className = 'source-option'; button.setAttribute('role', 'option');
+        const current = root.dataset.provider === option.provider && root.dataset.providerEpisodeId === option.episodeId;
+        button.textContent = `${option.label}${option.hardsub === 'bg' ? ' · БГ хардсаб' : ''}${current ? ' · избран' : ''}`;
+        button.disabled = current;
+        button.addEventListener('click', () => {
+          const params = new URLSearchParams({ provider: option.provider, episodeId: option.episodeId, number: root.dataset.ep!, title: root.dataset.title!, animeId: root.dataset.slug!, anilistId: root.dataset.anilistId! });
+          if (option.hardsub) params.set('hardsub', option.hardsub);
+          for (const direction of ['previous', 'next'] as const) { const href = readNavigation(direction); if (href) params.set(`${direction}Url`, href); }
+          window.location.assign(`/provider-watch?${params}`);
+        });
+        sourceOptions.append(button);
+      }
+      sourceOptions.dataset.loaded = 'true';
+    } catch (error) {
+      sourceOptions.textContent = `Източниците не можаха да се заредят: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  });
   const loading = document.querySelector<HTMLElement>('[data-player-loading]')!;
   const loadingLabel = loading.querySelector<HTMLElement>('[data-loading-label]')!;
   const setLoading = (visible: boolean, label = 'Зареждане на видеото…') => {
@@ -130,7 +176,8 @@ if (root && frame) {
     const add = (start: string, end: string, text: string) => {
       const from = seconds(start); const to = seconds(end);
       if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from || !text.trim()) return;
-      const cue = new VTTCue(from, to, text.trim());
+      const offsetSeconds = subtitleOffsetMs / 1000;
+      const cue = new VTTCue(Math.max(0, from + offsetSeconds), Math.max(0.05, to + offsetSeconds), text.trim());
       cue.line = -2; cue.align = 'center'; cue.position = 50; cue.positionAlign = 'center'; cue.size = 90;
       cues.push(cue);
     };
@@ -220,6 +267,11 @@ if (root && frame) {
       const animeId = root.dataset.anilistId;
       const apiUrl = animeId && animeId !== '0' ? `/api/subtitles/${encodeURIComponent(animeId)}/${encodeURIComponent(ep)}` : '';
       let response = apiUrl ? await fetch(apiUrl, { cache: 'no-store' }) : new Response('', { status: 404 });
+      if (response.headers.get('x-subtitle-hardsub') === 'bg') {
+        const hardsub = document.querySelector<HTMLElement>('[data-hardsub-label]');
+        if (hardsub) { hardsub.hidden = false; hardsub.textContent = 'Български хардсаб е наличен от източник · OCR не се изпълнява'; }
+        return;
+      }
       catalogOnlySubtitle = response.headers.get('x-subtitle-catalog-only') === 'true';
       if (response.status === 202) {
         translationPending = true;
@@ -239,6 +291,11 @@ if (root && frame) {
           }
         }
         if (response.status === 202) throw new Error('Translation is still queued; it will be available after the worker finishes.');
+      }
+      if (response.headers.get('x-subtitle-hardsub') === 'bg') {
+        const hardsub = document.querySelector<HTMLElement>('[data-hardsub-label]');
+        if (hardsub) { hardsub.hidden = false; hardsub.textContent = 'Български хардсаб е наличен от източник · OCR не се изпълнява'; }
+        return;
       }
       if (!response.ok) response = await fetch(`/subs/${encodeURIComponent(slug)}/${ep}.vtt`);
       if (!response.ok) return;
@@ -269,7 +326,7 @@ if (root && frame) {
     qualitySelect.value = String(prefs.quality);
     await loadLocalTrack();
     providerSubtitles.forEach((track, index) => {
-      if (!track.url || !/^https?:\/\//i.test(track.url) || !['vtt', 'srt', 'ass', 'ssa'].includes(track.format.toLowerCase())) return;
+      if (!isUsableSubtitleTrackUrl(track.url) || !['vtt', 'srt', 'ass', 'ssa'].includes(track.format.toLowerCase())) return;
       const language = /^(bg|bul|българ)/i.test(track.lang) ? 'bg' : /^(en|eng|english)/i.test(track.lang) ? 'en' : track.lang;
       const sourceLabel = streamProvider ? `${track.lang} · ${streamProvider}` : track.lang;
       addSubtitleChoice(`provider-${index}`, { kind: 'external', label: subtitleName(language, sourceLabel), language, url: track.url, format: track.format.toLowerCase() });
@@ -290,7 +347,7 @@ if (root && frame) {
     subtitleSelect.value = prefs.subtitles ? saved : 'off';
     await applySubtitleChoice(subtitleSelect.value);
   };
-  const attachNativeMediaFallback = (Hls: typeof import('hls.js/light').default) => {
+  const attachNativeMediaFallback = (Hls: typeof import('hls.js').default) => {
     const video = frame.querySelector('video');
     if (!video) throw new Error('Vidstack did not create its video element');
     nativeMediaFallback = video;
@@ -341,6 +398,13 @@ if (root && frame) {
         if (!payload.url || (payload.type !== 'hls' && payload.type !== 'mp4')) { offerIframeFallback(); unsupported('Доставчикът не върна поддържан видео източник. Можеш да отвориш страницата на доставчика.'); return; }
         providerSubtitles = payload.subtitles ?? [];
         streamProvider = payload.provider ?? '';
+        if (root.dataset.anilistId !== '0' && streamProvider) {
+          try {
+            const key = new URLSearchParams({ sourceId: streamProvider });
+            const offsetResponse = await fetch(`/api/subtitles/offset/${encodeURIComponent(root.dataset.anilistId!)}/${encodeURIComponent(ep)}?${key}`, { signal: AbortSignal.timeout(5000), cache: 'no-store' });
+            if (offsetResponse.ok) subtitleOffsetMs = Number((await offsetResponse.json() as { offset_ms?: number }).offset_ms) || 0;
+          } catch { /* Playback does not depend on offset persistence being reachable. */ }
+        }
         const ref = payload.headers?.referer ?? '';
         providerReferer = ref;
         sourceKind = payload.type;
@@ -353,7 +417,7 @@ if (root && frame) {
       }
       if (sourceKind === 'mp4') qualitySelect.closest('label')?.setAttribute('hidden', '');
       const [{ default: Hls }, { VidstackPlayer, VidstackPlayerLayout }] = await Promise.all([
-        import('hls.js/light'), import('vidstack/global/player'),
+        providerWatch ? import('hls.js/light') : import('hls.js'), import('vidstack/global/player'),
       ]);
       // Set the source before Vidstack connects the custom element. Assigning `src` only after
       // create() leaves SourceSelection without a loader in the browser build used here.
@@ -403,6 +467,15 @@ if (root && frame) {
   document.querySelector('[data-volume]')?.addEventListener('input', event => { const player = playback(); if (player) player.volume = Number((event.currentTarget as HTMLInputElement).value); });
   qualitySelect.addEventListener('change', () => { prefs.quality = Number(qualitySelect.value); if (hls) hls.currentLevel = prefs.quality; savePrefs(); });
   subtitleSelect.addEventListener('change', () => void applySubtitleChoice(subtitleSelect.value));
+  document.querySelectorAll<HTMLButtonElement>('[data-subtitle-offset]').forEach(button => button.addEventListener('click', async () => {
+    const delta = Number(button.dataset.subtitleOffset);
+    if (!Number.isFinite(delta) || !root.dataset.anilistId || root.dataset.anilistId === '0') return;
+    subtitleOffsetMs = Math.max(-120_000, Math.min(120_000, subtitleOffsetMs + delta));
+    for (const track of externalTextTracks.values()) for (const cue of track.cues) { cue.startTime = Math.max(0, cue.startTime + delta / 1000); cue.endTime = Math.max(cue.startTime + 0.05, cue.endTime + delta / 1000); }
+    try {
+      await fetch(`/api/subtitles/offset/${encodeURIComponent(root.dataset.anilistId)}/${encodeURIComponent(ep)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sourceId: streamProvider || 'default', offset_ms: subtitleOffsetMs }), signal: AbortSignal.timeout(5000) });
+    } catch { console.warn('Subtitle offset could not be saved'); }
+  }));
   fallbackToggle.addEventListener('click', () => {
     fallbackPanel.hidden = !fallbackPanel.hidden;
     fallbackToggle.textContent = fallbackPanel.hidden ? 'Отвори страницата на доставчика' : 'Скрий страницата на доставчика';

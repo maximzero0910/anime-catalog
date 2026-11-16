@@ -71,6 +71,30 @@ CREATE TABLE IF NOT EXISTS subtitle_title_aliases (
   PRIMARY KEY(anime_id,normalized_title)
 );
 CREATE INDEX IF NOT EXISTS subtitle_title_alias_lookup ON subtitle_title_aliases(normalized_title,anime_id);
+CREATE TABLE IF NOT EXISTS title_alias (
+  anilist_id TEXT NOT NULL, source_id TEXT NOT NULL, source_title TEXT NOT NULL,
+  normalized_title TEXT NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY(anilist_id,source_id,normalized_title)
+);
+CREATE INDEX IF NOT EXISTS title_alias_lookup ON title_alias(anilist_id,source_id);
+CREATE TABLE IF NOT EXISTS needs_mapping (
+  id INTEGER PRIMARY KEY, anilist_id TEXT NOT NULL, episode_number INTEGER NOT NULL,
+  source_id TEXT NOT NULL, source_title TEXT NOT NULL, candidate_url TEXT,
+  score REAL NOT NULL, state TEXT NOT NULL DEFAULT 'NEEDS_MAPPING' CHECK(state IN ('NEEDS_MAPPING','MAPPED','REJECTED')),
+  reason TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  UNIQUE(anilist_id,episode_number,source_id,source_title,candidate_url)
+);
+CREATE INDEX IF NOT EXISTS needs_mapping_queue ON needs_mapping(state,created_at);
+CREATE TABLE IF NOT EXISTS subtitle_hardsubs (
+  anilist_id TEXT NOT NULL, episode_number INTEGER NOT NULL, source_id TEXT NOT NULL,
+  source_title TEXT NOT NULL, source_url TEXT, created_at TEXT NOT NULL,
+  PRIMARY KEY(anilist_id,episode_number,source_id)
+);
+CREATE TABLE IF NOT EXISTS subtitle_offsets (
+  anime_id INTEGER NOT NULL, episode INTEGER NOT NULL, source_id TEXT NOT NULL,
+  offset_ms INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
+  PRIMARY KEY(anime_id,episode,source_id)
+);
 CREATE TABLE IF NOT EXISTS subtitle_provider_misses (
   anime_id TEXT NOT NULL, episode_number INTEGER NOT NULL, provider TEXT NOT NULL, expires_at INTEGER NOT NULL,
   PRIMARY KEY(anime_id,episode_number,provider)
@@ -90,9 +114,63 @@ CREATE INDEX IF NOT EXISTS subtitle_index_jobs_ready ON subtitle_index_jobs(stat
 CREATE TABLE IF NOT EXISTS subtitle_indexer_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
 `);
 
-export interface Job { id: number; anime_id: number; season_id: string | null; episode_id: string; target_language: string; source_language: string | null; provider_id: string | null; status: JobState; attempts: number; available_at: number; locked_at: number | null; checkpoint: Record<string, unknown>; error: string | null; source_hash: string | null; }
+export interface Job { id: number; anime_id: number; season_id: string | null; episode_id: string; target_language: string; source_language: string | null; provider_id: string | null; status: JobState; attempts: number; available_at: number; locked_at: number | null; checkpoint: Record<string, unknown>; error: string | null; source_hash: string | null; updated_at: string; }
 const fromRow = (row: Record<string, unknown>): Job => ({ ...row, checkpoint: JSON.parse(String(row.checkpoint ?? '{}')) } as Job);
 const nowIso = () => new Date().toISOString();
+
+// DECISION: Seed only observed labels for the verified test title; all other title fixes remain operator-managed aliases.
+database.prepare(`INSERT OR IGNORE INTO title_alias(anilist_id,source_id,source_title,normalized_title,created_at) VALUES(?,?,?,?,?)`).run('142853', 'anikoto', 'Tokyo Revengers: Christmas Showdown', normalizeAlias('Tokyo Revengers: Christmas Showdown'), nowIso());
+database.prepare(`INSERT OR IGNORE INTO title_alias(anilist_id,source_id,source_title,normalized_title,created_at) VALUES(?,?,?,?,?)`).run('142853', 'anima-pr', 'Tokyo Revengers S1-2', normalizeAlias('Tokyo Revengers S1-2'), nowIso());
+database.prepare(`INSERT OR IGNORE INTO title_alias(anilist_id,source_id,source_title,normalized_title,created_at) VALUES(?,?,?,?,?)`).run('142853', 'playtube', 'Токийски отмъстители', normalizeAlias('Токийски отмъстители'), nowIso());
+
+function normalizeAlias(value: string): string {
+  return value.normalize('NFKD').replace(/\p{M}/gu, '').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+export interface TitleAlias { anilist_id: string; source_id: string; source_title: string; normalized_title: string; }
+export function subtitleTitleAliases(anilistId: number | string, sourceId?: string): TitleAlias[] {
+  return sourceId
+    ? database.prepare('SELECT anilist_id,source_id,source_title,normalized_title FROM title_alias WHERE anilist_id=? AND source_id=? ORDER BY source_title').all(String(anilistId), sourceId) as TitleAlias[]
+    : database.prepare('SELECT anilist_id,source_id,source_title,normalized_title FROM title_alias WHERE anilist_id=? ORDER BY source_id,source_title').all(String(anilistId)) as TitleAlias[];
+}
+export function addSubtitleTitleAlias(anilistId: number | string, sourceId: string, sourceTitle: string): void {
+  const title = sourceTitle.trim();
+  if (!/^\d{1,12}$/.test(String(anilistId)) || !/^[a-z0-9][a-z0-9-]{0,63}$/i.test(sourceId) || !title || title.length > 240) throw new Error('invalid title alias');
+  database.prepare('INSERT OR IGNORE INTO title_alias(anilist_id,source_id,source_title,normalized_title,created_at) VALUES(?,?,?,?,?)').run(String(anilistId), sourceId.toLowerCase(), title, normalizeAlias(title), nowIso());
+}
+export function queueNeedsMapping(input: { animeId: number | string; episode: number; sourceId: string; sourceTitle: string; candidateUrl?: string | null; score: number; reason: string }): void {
+  database.prepare(`INSERT INTO needs_mapping(anilist_id,episode_number,source_id,source_title,candidate_url,score,reason,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(anilist_id,episode_number,source_id,source_title,candidate_url) DO UPDATE SET score=excluded.score,reason=excluded.reason,updated_at=excluded.updated_at WHERE needs_mapping.state='NEEDS_MAPPING'`).run(String(input.animeId), input.episode, input.sourceId, input.sourceTitle.slice(0, 240), input.candidateUrl ?? null, input.score, input.reason.slice(0, 500), nowIso(), nowIso());
+}
+export function pendingSubtitleMappings(limit = 100): Array<Record<string, unknown>> {
+  return database.prepare("SELECT * FROM needs_mapping WHERE state='NEEDS_MAPPING' ORDER BY created_at,id LIMIT ?").all(Math.max(1, Math.min(500, limit))) as Array<Record<string, unknown>>;
+}
+export function resolveSubtitleMapping(id: number, action: 'map' | 'reject'): void {
+  const row = database.prepare("SELECT * FROM needs_mapping WHERE id=? AND state='NEEDS_MAPPING'").get(id) as { anilist_id: string; source_id: string; source_title: string } | undefined;
+  if (!row) throw new Error('mapping candidate not found');
+  if (action === 'map') addSubtitleTitleAlias(row.anilist_id, row.source_id, row.source_title);
+  database.prepare('UPDATE needs_mapping SET state=?,updated_at=? WHERE id=?').run(action === 'map' ? 'MAPPED' : 'REJECTED', nowIso(), id);
+}
+export function saveSubtitleHardsub(input: { animeId: number | string; episode: number; sourceId: string; sourceTitle: string; sourceUrl?: string | null }): void {
+  database.prepare('INSERT INTO subtitle_hardsubs(anilist_id,episode_number,source_id,source_title,source_url,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(anilist_id,episode_number,source_id) DO UPDATE SET source_title=excluded.source_title,source_url=excluded.source_url').run(String(input.animeId), input.episode, input.sourceId, input.sourceTitle.slice(0, 240), input.sourceUrl ?? null, nowIso());
+}
+export function getSubtitleHardsub(animeId: number | string, episode: number): { source_id: string; source_title: string; source_url: string | null } | undefined {
+  return database.prepare('SELECT source_id,source_title,source_url FROM subtitle_hardsubs WHERE anilist_id=? AND episode_number=? ORDER BY created_at DESC LIMIT 1').get(String(animeId), episode) as { source_id: string; source_title: string; source_url: string | null } | undefined;
+}
+export function getSubtitleOffset(animeId: number, episode: number, sourceId: string): number {
+  const row = database.prepare('SELECT offset_ms FROM subtitle_offsets WHERE anime_id=? AND episode=? AND source_id=?').get(animeId, episode, sourceId) as { offset_ms: number } | undefined;
+  return row?.offset_ms ?? 0;
+}
+export function subtitleOffsets(animeId: number, episode: number): Record<string, number> {
+  const rows = database.prepare('SELECT source_id,offset_ms FROM subtitle_offsets WHERE anime_id=? AND episode=? ORDER BY source_id').all(animeId, episode) as Array<{ source_id: string; offset_ms: number }>;
+  return Object.fromEntries(rows.map(row => [row.source_id, row.offset_ms]));
+}
+export function setSubtitleOffset(animeId: number, episode: number, sourceId: string, offsetMs: number): void {
+  database.prepare('INSERT INTO subtitle_offsets(anime_id,episode,source_id,offset_ms,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(anime_id,episode,source_id) DO UPDATE SET offset_ms=excluded.offset_ms,updated_at=excluded.updated_at').run(animeId, episode, sourceId, Math.max(-120_000, Math.min(120_000, Math.trunc(offsetMs))), nowIso());
+}
+export function skipJobForNoSubtitleSource(jobId: number, reason = 'no subtitle source'): void {
+  updateJob(jobId, 'SKIPPED', { error: reason, lockedAt: null });
+  logJob(jobId, 'info', 'subtitle_discovery_skipped', { reason });
+}
 
 export interface SubtitleIndexInput {
   animeId: string; anidbId?: string | null; imdbId?: string | null; seasonNumber?: number | null;
@@ -258,6 +336,18 @@ export function enqueueJobOnce(animeId: number, episodeId: number, target = 'bg'
   if (job.status === 'DISCOVERED') updateJob(job.id, 'QUEUED');
   return { job: getJob(job.id)!, inserted: result.changes === 1 };
 }
+export function enqueueOnDemandJob(animeId: number, episodeId: number, target = 'bg', retryCooldownMs = 5 * 60_000): Job {
+  const { job } = enqueueJobOnce(animeId, episodeId, target);
+  if (job.status === 'FAILED' && job.available_at === Number.MAX_SAFE_INTEGER && Date.now() - Date.parse(job.updated_at) >= retryCooldownMs) {
+    database.prepare(`UPDATE subtitle_jobs SET status='QUEUED',attempts=0,available_at=0,locked_at=NULL,error=NULL,updated_at=? WHERE id=? AND status='FAILED' AND available_at=?`).run(nowIso(), job.id, Number.MAX_SAFE_INTEGER);
+    logJob(job.id, 'info', 'on_demand_retry_queued', { previousError: job.error, previousAttempts: job.attempts });
+  }
+  const latest = getJob(job.id)!;
+  if (['QUEUED', 'DISCOVERED'].includes(latest.status) && latest.checkpoint.onDemand !== true) {
+    updateJob(job.id, latest.status, { checkpoint: { ...latest.checkpoint, onDemand: true }, lockedAt: null });
+  }
+  return getJob(job.id)!;
+}
 export function getJob(id: number): Job | undefined { const row = database.prepare('SELECT * FROM subtitle_jobs WHERE id=?').get(id) as Record<string, unknown> | undefined; return row && fromRow(row); }
 export function heartbeatJob(id: number): void { database.prepare(`UPDATE subtitle_jobs SET locked_at=? WHERE id=? AND status IN ('DOWNLOADING','NORMALIZING','TRANSLATING','VALIDATING')`).run(Date.now(), id); }
 export function updateJob(id: number, status: JobState, patch: { sourceLanguage?: string; providerId?: string; sourceHash?: string; error?: string | null; checkpoint?: Record<string, unknown>; lockedAt?: number | null; attempts?: number; availableAt?: number } = {}): void {
@@ -298,7 +388,7 @@ export function storedBulgarianCount(): number { const row = database.prepare(`S
 export function claimJobs(limit: number): Job[] {
   const now = Date.now();
   const transaction = database.transaction(() => {
-    const rows = database.prepare(`SELECT j.* FROM subtitle_jobs j WHERE j.status IN ('QUEUED','FAILED') AND j.available_at<=? ORDER BY CASE j.source_language WHEN 'en' THEN 0 WHEN 'ja' THEN 1 ELSE 2 END, (SELECT COUNT(*) FROM episodes e WHERE e.title_id=j.anime_id) DESC, CASE j.status WHEN 'FAILED' THEN 1 ELSE 0 END, j.attempts, j.anime_id, CAST(j.episode_id AS REAL), j.episode_id LIMIT ?`).all(now, limit) as Array<Record<string, unknown>>;
+    const rows = database.prepare(`SELECT j.* FROM subtitle_jobs j WHERE j.status IN ('QUEUED','FAILED') AND j.available_at<=? ORDER BY CASE json_extract(j.checkpoint,'$.onDemand') WHEN 1 THEN 0 ELSE 1 END, CASE j.source_language WHEN 'en' THEN 0 WHEN 'ja' THEN 1 ELSE 2 END, (SELECT COUNT(*) FROM episodes e WHERE e.title_id=j.anime_id) DESC, CASE j.status WHEN 'FAILED' THEN 1 ELSE 0 END, j.attempts, j.anime_id, CAST(j.episode_id AS REAL), j.episode_id LIMIT ?`).all(now, limit) as Array<Record<string, unknown>>;
     const update = database.prepare(`UPDATE subtitle_jobs SET status='DOWNLOADING',locked_at=?,updated_at=?,attempts=attempts+1 WHERE id=? AND status IN ('QUEUED','FAILED')`);
     for (const row of rows) update.run(now, nowIso(), row.id);
     return rows.map(row => getJob(Number(row.id))!).filter(job => job.status === 'DOWNLOADING');
@@ -308,7 +398,7 @@ export function claimJobs(limit: number): Job[] {
 export function claimUndiscoveredJobs(limit: number): Job[] {
   const now = Date.now();
   const transaction = database.transaction(() => {
-    const rows = database.prepare(`SELECT j.* FROM subtitle_jobs j WHERE j.status='QUEUED' AND j.source_language IS NULL ORDER BY (SELECT COUNT(*) FROM episodes e WHERE e.title_id=j.anime_id) DESC,j.anime_id,CAST(j.episode_id AS REAL),j.episode_id LIMIT ?`).all(limit) as Array<Record<string, unknown>>;
+    const rows = database.prepare(`SELECT j.* FROM subtitle_jobs j WHERE j.status='QUEUED' AND j.source_language IS NULL ORDER BY CASE json_extract(j.checkpoint,'$.onDemand') WHEN 1 THEN 0 ELSE 1 END,(SELECT COUNT(*) FROM episodes e WHERE e.title_id=j.anime_id) DESC,j.anime_id,CAST(j.episode_id AS REAL),j.episode_id LIMIT ?`).all(limit) as Array<Record<string, unknown>>;
     const update = database.prepare(`UPDATE subtitle_jobs SET status='DOWNLOADING',locked_at=?,updated_at=?,attempts=attempts+1 WHERE id=? AND status='QUEUED' AND source_language IS NULL`);
     for (const row of rows) update.run(now, nowIso(), row.id);
     return rows.map(row => getJob(Number(row.id))!).filter(job => job.status === 'DOWNLOADING');

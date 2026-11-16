@@ -1,4 +1,4 @@
-import { cpus, freemem, totalmem } from 'node:os';
+import { cpus } from 'node:os';
 
 function integer(name: string, fallback: number, min: number, max: number): number {
   const parsed = Number(process.env[name]);
@@ -9,7 +9,7 @@ function decimal(name: string, fallback: number, min: number, max: number): numb
   return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
 }
 
-// DECISION: keep one translation in flight by default because the installed 27B model is larger than available VRAM.
+// DECISION: online translation is I/O-bound; two jobs match the provider scheduler's global request cap.
 export const subtitleConfig = {
   inferenceUrl: (process.env.SUBTITLE_INFERENCE_URL ?? '').replace(/\/$/, ''),
   ollamaUrl: (process.env.OLLAMA_HOST ?? 'http://127.0.0.1:11434').replace(/\/$/, ''),
@@ -17,7 +17,7 @@ export const subtitleConfig = {
   fallbackModels: (process.env.SUBTITLE_FALLBACK_MODELS ?? '').split(',').map(value => value.trim()).filter(Boolean),
   contextWindow: integer('SUBTITLE_CONTEXT_WINDOW', 8192, 2048, 32768),
   gpuUtilization: decimal('SUBTITLE_GPU_UTILIZATION', 0.70, 0, 1),
-  maxConcurrentJobs: integer('SUBTITLE_MAX_CONCURRENT', 1, 1, Math.max(1, cpus().length)),
+  maxConcurrentJobs: integer('SUBTITLE_MAX_CONCURRENT', 2, 1, Math.max(1, cpus().length)),
   batchSize: integer('SUBTITLE_BATCH_SIZE', 4, 1, 40),
   maxBatchTokens: integer('SUBTITLE_MAX_BATCH_TOKENS', 3600, 256, 20000),
   contextOverlap: integer('SUBTITLE_CONTEXT_OVERLAP', 3, 0, 10),
@@ -43,7 +43,3 @@ export const subtitleConfig = {
   googleWidgetApiKey: process.env.SUBTITLE_GOOGLE_WIDGET_API_KEY ?? 'AIzaSyATBXajvzQLTDHEQbcpq0Ihe0vWDHmO520',
   googleWidgetUserAgent: process.env.SUBTITLE_GOOGLE_WIDGET_USER_AGENT ?? 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36',
 };
-
-export function memoryBudgetAvailable(): boolean {
-  return totalmem() === 0 || freemem() / totalmem() >= 1 - subtitleConfig.ramCeiling;
-}

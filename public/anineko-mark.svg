@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Anineko cat mark">
+  <defs>
+    <clipPath id="cat"><path d="M7 24 6 5l19 12a22 22 0 0 1 14 0L58 5l-1 20a24 24 0 1 1-50-1Z"/></clipPath>
+    <clipPath id="left-ear"><path d="M7 24 6 5l19 12-2 8Z"/></clipPath>
+    <clipPath id="right-ear"><path d="m39 17L58 5l-1 20-16 1Z"/></clipPath>
+  </defs>
+  <g clip-path="url(#cat)">
+    <path fill="#fff" d="M0 0h64v22H0z"/>
+    <path fill="#25884b" d="M0 22h64v21H0z"/>
+    <path fill="#d94343" d="M0 43h64v21H0z"/>
+  </g>
+  <path fill="#fff" d="M7 24 6 5l19 12a22 22 0 0 1 14 0L58 5l-1 20a24 24 0 1 1-50-1Z" opacity=".14"/>
+  <path d="M7 24 6 5l19 12a22 22 0 0 1 14 0L58 5l-1 20a24 24 0 1 1-50-1Z" fill="none" stroke="#f5f2e9" stroke-width="2.4" stroke-linejoin="round"/>
+  <path d="M12 13 21 19M52 13l-9 6" fill="none" stroke="#d94343" stroke-width="2.2" stroke-linecap="round"/>
+  <path d="M21 32v.4M43 32v.4" stroke="#13271c" stroke-width="4.5" stroke-linecap="round"/>
+  <path d="m29 38 3 2 3-2-3 5-3-5Z" fill="#d94343"/>
+  <path d="M32 43c-2 3-5 3-7 1m7-1c2 3 5 3 7 1M19 39l7 1m-7 3 7-1m19-3-7 1m7 3-7-1" fill="none" stroke="#173c28" stroke-width="1.5" stroke-linecap="round"/>
+</svg>
