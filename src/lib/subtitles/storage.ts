@@ -287,6 +287,13 @@ export function workerConcurrency(): number { const row = database.prepare(`SELE
 export function setWorkerConcurrency(value: number): void { database.prepare(`INSERT INTO subtitle_worker_settings(key,value,updated_at) VALUES('concurrency',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).run(String(Math.max(1, Math.min(subtitleConfig.maxConcurrentJobs, Math.floor(value)))), nowIso()); }
 export function persistModelStatus(value: Record<string, unknown>): void { database.prepare(`INSERT INTO subtitle_worker_settings(key,value,updated_at) VALUES('models',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).run(JSON.stringify(value), nowIso()); }
 export function persistedModelStatus(): Record<string, unknown> | null { const row = database.prepare(`SELECT value FROM subtitle_worker_settings WHERE key='models'`).get() as { value: string } | undefined; return row ? JSON.parse(row.value) as Record<string, unknown> : null; }
+export function persistSubtitleProviderState(provider: string, state: Record<string, unknown>): void {
+  database.prepare(`INSERT INTO subtitle_worker_settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).run(`provider:${provider}`, JSON.stringify(state), nowIso());
+}
+export function subtitleProviderStates(): Record<string, Record<string, unknown>> {
+  const rows = database.prepare(`SELECT key,value FROM subtitle_worker_settings WHERE key LIKE 'provider:%'`).all() as Array<{ key: string; value: string }>;
+  return Object.fromEntries(rows.map(row => [row.key.slice('provider:'.length), JSON.parse(row.value) as Record<string, unknown>]));
+}
 export function storedBulgarianCount(): number { const row = database.prepare(`SELECT COUNT(*) AS count FROM (SELECT anime_id,episode_id FROM subtitle_artifacts WHERE target_language='bg' AND validation_status='validated' UNION SELECT title_id,CAST(number AS TEXT) FROM subs WHERE status IN ('qc','final') AND path IS NOT NULL)`).get() as { count: number }; return row.count; }
 export function claimJobs(limit: number): Job[] {
   const now = Date.now();
@@ -323,10 +330,10 @@ export function saveBody(content: string, extension: string): Promise<{ hash: st
 }
 export async function readBody(path: string): Promise<string> { return readFile(resolve(bodyRoot, path), 'utf8'); }
 export function relativeBodyPath(path: string): string { return path.startsWith(`${bodyRoot}/`) ? path.slice(bodyRoot.length + 1) : path; }
-export function storeValidatedArtifact(input: { animeId: number; seasonId: string | null; episodeId: string; sourceLanguage: string; targetLanguage: string; sourceHash: string; model: string; configHash?: string; sourceFormat: string; translatedFormat: string; sourcePath: string; translatedPath: string; score: number }): number {
+export function storeValidatedArtifact(input: { animeId: number; seasonId: string | null; episodeId: string; sourceLanguage: string; targetLanguage: string; sourceHash: string; model: string; configHash?: string; translationVersion?: string; sourceFormat: string; translatedFormat: string; sourcePath: string; translatedPath: string; score: number }): number {
   const configHash = input.configHash ?? `native:${input.model}`;
   const insert = database.prepare(`INSERT INTO subtitle_artifacts(anime_id,season_id,episode_id,source_language,target_language,source_hash,model,translation_version,config_hash,created_at,validation_status,source_format,translated_format,source_path,translated_path,score) VALUES(@animeId,@seasonId,@episodeId,@sourceLanguage,@targetLanguage,@sourceHash,@model,@version,@configHash,@createdAt,'validated',@sourceFormat,@translatedFormat,@sourcePath,@translatedPath,@score) ON CONFLICT(anime_id,episode_id,source_hash,target_language,config_hash) DO NOTHING`);
-  insert.run({ ...input, configHash, version: process.env.SUBTITLE_TRANSLATION_VERSION ?? subtitleConfig.translationVersion, createdAt: nowIso() });
+  insert.run({ ...input, configHash, version: input.translationVersion ?? process.env.SUBTITLE_TRANSLATION_VERSION ?? subtitleConfig.translationVersion, createdAt: nowIso() });
   const row = database.prepare(`SELECT id FROM subtitle_artifacts WHERE anime_id=? AND episode_id=? AND source_hash=? AND target_language=? AND config_hash=? AND validation_status='validated'`).get(input.animeId, input.episodeId, input.sourceHash, input.targetLanguage, configHash) as { id: number } | undefined;
   if (!row) throw new Error('Validated subtitle artifact insert did not persist');
   database.prepare(`INSERT INTO subs(title_id,number,path,source,status,translator) VALUES(?,?,?,'local-ai','final',?) ON CONFLICT(title_id,number) DO UPDATE SET path=excluded.path,source=excluded.source,status=excluded.status,translator=excluded.translator WHERE subs.status NOT IN ('final','qc')`).run(input.animeId, Number(input.episodeId), relativeBodyPath(input.translatedPath), input.model);

@@ -71,3 +71,9 @@ test('QA rejects untranslated Latin fragments mixed into Bulgarian cues', () => 
   const translated = { ...source, cues: source.cues.map(cue => ({ ...cue, originalText: 'да бъдеш затворен в клетка, da бъдеш' })) };
   assert.match(validateTranslation(source, translated, []).issues[0]!, /^untranslated-latin-fragment:c1-/);
 });
+
+test('QA allows short retained character or organization names within Bulgarian text', () => {
+  const source = parseSubtitle('1\n00:00:01,000 --> 00:00:02,000\nHer family owns the Shinomiya Group\n', 'srt');
+  const translated = { ...source, cues: source.cues.map(cue => ({ ...cue, originalText: 'Семейството ѝ притежава Shinomiya Group' })) };
+  assert.equal(validateTranslation(source, translated, []).valid, true);
+});

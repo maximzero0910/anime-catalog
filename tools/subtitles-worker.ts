@@ -137,7 +137,10 @@ async function main(): Promise<void> {
   const availableRam = freemem() / totalmem();
   if (availableRam < 1 - subtitleConfig.ramCeiling) throw new Error(`RAM headroom ${Math.round(availableRam * 100)}% is below the configured safety margin`);
   if (workerControl() === 'paused') console.log('Worker is paused; resume it from /admin/subtitles or the admin API.');
-  const models = await availableModels();
+  const models = await availableModels().catch(error => {
+    console.warn(`Local model inventory unavailable; remote subtitle providers will still run: ${error instanceof Error ? error.message : String(error)}`);
+    return [];
+  });
   const selectedModel = subtitleConfig.model || [...models].sort((a, b) => (b.size ?? 0) - (a.size ?? 0))[0]?.name || null;
   persistModelStatus({ activeModel: selectedModel, models });
   console.log(`Worker active: maxConcurrency=${workerConcurrency()}, batchSize=${subtitleConfig.batchSize}, context=${subtitleConfig.contextWindow}, queueCap=${cap}`);

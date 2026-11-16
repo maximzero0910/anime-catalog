@@ -5,6 +5,8 @@ import { parseSubtitle, serializeSubtitle, type Cue, type NormalizedSubtitle } f
 import { validateTranslation } from './qa';
 import { prepareCueForTranslation, restoreCueFormatting } from './formatting';
 import { findCachedArtifact, getGlossary, logJob, persistModelStatus, readBody, saveBody, storeValidatedArtifact, updateJob, workerControl, type Job } from './storage';
+import { translateThroughProviders } from './providers';
+import { formatTime } from './normalize';
 
 export class SubtitleWorkerStop extends Error { constructor() { super('Worker requested a graceful stop after a saved batch'); this.name = 'SubtitleWorkerStop'; } }
 export class SubtitleWorkerPause extends Error { constructor() { super('Worker paused after a saved batch'); this.name = 'SubtitleWorkerPause'; } }
@@ -62,10 +64,65 @@ async function translateOneBatch(language: SourceLanguage, cues: Cue[], context:
 
 export async function translateSubtitleJob(input: { job: Job; sourcePath: string; sourceLanguage: SourceLanguage; sourceFormat: string; sourceHash: string; sourceBody: string; providerId: string }): Promise<{ artifactId: number; model: string; score: number; elapsedMs: number }> {
   const { job, sourcePath, sourceLanguage, sourceFormat, sourceHash, sourceBody, providerId } = input;
+  updateJob(job.id, 'NORMALIZING', { sourceLanguage, providerId, sourceHash, checkpoint: { ...job.checkpoint, sourcePath, sourceFormat, sourceLanguage, sourceHash } });
+  const subtitle = parseSubtitle(sourceBody, sourceFormat as 'srt' | 'ass' | 'ssa' | 'vtt');
+  if (subtitle.sourceHash !== sourceHash) throw new Error('Downloaded subtitle content hash changed during normalization');
+  const glossary = getGlossary(job.anime_id);
+  const providerVersion = 'subtitle-provider-adapters-v1';
+  const providerSrt = `${subtitle.cues.map((cue, index) => `${index + 1}\n${formatTime(cue.start, true)} --> ${formatTime(cue.end, true)}\n${cue.originalText}`).join('\n\n')}\n`;
+  const providerFailures: string[] = [];
+  const providerStarted = Date.now();
+  const acceptedProviderResult: { value: { artifactId: number; providerId: string; score: number } | null } = { value: null };
+  updateJob(job.id, 'TRANSLATING', { sourceLanguage, providerId, sourceHash, error: null, checkpoint: { ...job.checkpoint, sourcePath, sourceFormat, sourceLanguage, sourceHash, providerChain: true, providerStartedAt: new Date().toISOString() } });
+  logJob(job.id, 'info', 'subtitle_provider_chain_started', { providers: subtitleConfig.providerOrder, sourceLanguage, targetLanguage: 'bg' });
+  try {
+    const result = await translateThroughProviders({ srt: providerSrt, sourceLang: sourceLanguage, targetLang: 'bg' }, {
+      totalBudgetMs: 300_000,
+      getCached: async id => {
+        const cacheConfig = createHash('sha256').update(JSON.stringify({ sourceHash, targetLanguage: 'bg', providerId: id, adapterVersion: providerVersion })).digest('hex');
+        const cachedProvider = findCachedArtifact(sourceHash, 'bg', cacheConfig, providerVersion);
+        return cachedProvider ? readBody(String(cachedProvider.translated_path)) : undefined;
+      },
+      onFailure: (id, reason) => {
+        providerFailures.push(`${id}: ${reason}`);
+        const error = `${id}: ${reason}`.slice(0, 1000);
+        updateJob(job.id, 'TRANSLATING', { sourceLanguage, providerId: id, sourceHash, error });
+        logJob(job.id, 'warn', 'subtitle_provider_failed', { provider: id, reason });
+      },
+      onSuccess: async (id, outputSrt, latencyMs, cacheHit) => {
+        const output = parseSubtitle(outputSrt, 'srt');
+        if (output.cues.length !== subtitle.cues.length) throw new Error(`provider cue parity failed: input=${subtitle.cues.length}, output=${output.cues.length}`);
+        const translatedSubtitle: NormalizedSubtitle = {
+          ...subtitle,
+          cues: subtitle.cues.map((cue, index) => {
+            const translatedCue = output.cues[index]!;
+            if (cue.start !== translatedCue.start || cue.end !== translatedCue.end) throw new Error(`provider timestamp mismatch at cue ${index + 1}`);
+            return { ...cue, translatedText: translatedCue.originalText };
+          }),
+        };
+        const qa = validateTranslation(subtitle, { ...translatedSubtitle, cues: translatedSubtitle.cues.map(cue => ({ ...cue, originalText: cue.translatedText })) }, glossary);
+        if (!qa.valid || qa.score < 0.65) throw new Error(`provider QA rejected output (score ${qa.score.toFixed(2)}): ${qa.issues.join(', ')}`);
+        const outputBody = serializeSubtitle(translatedSubtitle, true);
+        const savedSource = await saveBody(sourceBody, sourceFormat);
+        const savedOutput = await saveBody(outputBody, subtitle.format);
+        const cacheConfig = createHash('sha256').update(JSON.stringify({ sourceHash, targetLanguage: 'bg', providerId: id, adapterVersion: providerVersion })).digest('hex');
+        const artifactId = storeValidatedArtifact({ animeId: job.anime_id, seasonId: job.season_id, episodeId: job.episode_id, sourceLanguage, targetLanguage: 'bg', sourceHash, model: `provider:${id}`, configHash: cacheConfig, translationVersion: providerVersion, sourceFormat: subtitle.format, translatedFormat: subtitle.format, sourcePath: savedSource.path || sourcePath, translatedPath: savedOutput.path, score: qa.score });
+        updateJob(job.id, 'VALIDATING', { sourceLanguage, providerId: id, sourceHash, error: null, checkpoint: { ...job.checkpoint, artifactId, providerId: id, cacheHit, totalCues: subtitle.cues.length, score: qa.score } });
+        logJob(job.id, 'info', 'provider_translation_validated', { provider: id, cacheHit, latencyMs, score: qa.score, cues: subtitle.cues.length });
+        acceptedProviderResult.value = { artifactId, providerId: id, score: qa.score };
+      },
+    });
+    const accepted = acceptedProviderResult.value;
+    if (!accepted || accepted.providerId !== result.providerId) throw new Error('Provider chain returned without a validated artifact');
+    return { artifactId: accepted.artifactId, model: `provider:${accepted.providerId}`, score: accepted.score, elapsedMs: result.cacheHit ? 0 : Date.now() - providerStarted };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    logJob(job.id, 'warn', 'subtitle_provider_chain_exhausted', { reason, failures: providerFailures });
+    updateJob(job.id, 'NORMALIZING', { sourceLanguage, providerId, sourceHash, error: reason.slice(0, 1000) });
+  }
   const coverage = await modelCoverage();
   persistModelStatus(coverage as unknown as Record<string, unknown>);
   const configVersion = process.env.SUBTITLE_TRANSLATION_VERSION ?? subtitleConfig.translationVersion;
-  const glossary = getGlossary(job.anime_id);
   const configHash = createHash('sha256').update(JSON.stringify({ promptVersion: '3', model: coverage.activeModel, sourceLanguage, sourceFormat, targetLanguage: 'bg', version: configVersion, temperature: subtitleConfig.temperature, contextWindow: subtitleConfig.contextWindow, batchSize: subtitleConfig.batchSize, maxBatchTokens: subtitleConfig.maxBatchTokens, contextOverlap: subtitleConfig.contextOverlap, glossary })).digest('hex');
   const cached = findCachedArtifact(sourceHash, 'bg', configHash, configVersion);
   if (cached) {
@@ -76,8 +133,6 @@ export async function translateSubtitleJob(input: { job: Job; sourcePath: string
     return { artifactId, model: cacheModel, score: Number(cached.score), elapsedMs: 0 };
   }
   updateJob(job.id, 'NORMALIZING', { sourceLanguage, providerId, sourceHash, checkpoint: { ...job.checkpoint, sourcePath, sourceFormat, sourceLanguage, sourceHash, offset: Number(job.checkpoint.offset ?? 0), translated: job.checkpoint.translated ?? {} } });
-  const subtitle = parseSubtitle(sourceBody, sourceFormat as 'srt' | 'ass' | 'ssa' | 'vtt');
-  if (subtitle.sourceHash !== sourceHash) throw new Error('Downloaded subtitle content hash changed during normalization');
   const checkpointMatches = job.checkpoint.translationVersion === configVersion && job.checkpoint.configHash === configHash;
   if (!checkpointMatches && Object.keys((job.checkpoint.translated ?? {}) as Record<string, string>).length) logJob(job.id, 'info', 'checkpoint_reset_for_translation_config', { previousVersion: job.checkpoint.translationVersion ?? null, currentVersion: configVersion, previousConfigHash: job.checkpoint.configHash ?? null, currentConfigHash: configHash });
   const checkpoint = checkpointMatches && job.checkpoint.translated && typeof job.checkpoint.translated === 'object' ? job.checkpoint.translated as Record<string, string> : {};

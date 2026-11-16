@@ -28,7 +28,11 @@ export function validateTranslation(source: NormalizedSubtitle, translated: Norm
     const output = result.originalText.trim();
     if (!output) { issues.push(`empty-translation:${original.id}`); continue; }
     const spokenText = output.replace(/\{[^}]*\}|<[^>]+>/g, '').trim();
-    if (/[\p{Script=Latin}]/u.test(spokenText)) issues.push(`untranslated-latin-fragment:${original.id}`);
+    if (/[\p{Script=Latin}]/u.test(spokenText)) {
+      const latinWords = spokenText.match(/\b[A-Za-z][A-Za-z'-]*\b/g) ?? [];
+      const retainedProperName = latinWords.length > 0 && latinWords.length <= 2 && latinWords.every(word => /^[A-Z][a-z]+(?:['-][A-Z]?[a-z]+)*$/.test(word));
+      if (!retainedProperName) issues.push(`untranslated-latin-fragment:${original.id}`);
+    }
     if (/^[A-Za-z\p{P}\p{N}\s]+$/u.test(spokenText) && /\p{L}/u.test(original.originalText) && !/^(?:\[.*\]|\(.*\)|♪.*♪)$/u.test(original.originalText.trim())) untranslated++;
     const ratio = output.length / Math.max(1, original.originalText.length);
     if (ratio < 0.12 || ratio > 4) suspiciousLength++;

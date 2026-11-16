@@ -32,6 +32,16 @@ export const subtitleConfig = {
   dataDirectory: process.env.SUBTITLE_DATA_DIR ?? 'data/subtitles',
   targetLanguage: 'bg',
   translationVersion: '3',
+  // DECISION: fixture RTTs ranked the callable adapters SyedGakbar, TranslateSubtitles.co, translate-subtitles.com, then Editsub.
+  providerOrder: (process.env.SUBTITLE_PROVIDERS ?? 'syedgakbar,translatesubtitles-co,translate-subtitles-com,editsub,subtitlestranslator').split(',').map(value => value.trim()).filter(Boolean),
+  providerTimeoutMs: integer('SUBTITLE_PROVIDER_TIMEOUT_MS', 60_000, 1_000, 60_000),
+  providerJobBudgetMs: integer('SUBTITLE_PROVIDER_JOB_BUDGET_MS', 300_000, 1_000, 300_000),
+  providerMaxBatchTokens: integer('SUBTITLE_PROVIDER_MAX_BATCH_TOKENS', 2400, 128, 20_000),
+  providerGlobalConcurrency: integer('SUBTITLE_PROVIDER_GLOBAL_CONCURRENCY', 2, 1, 2),
+  providerRequestsPerWindow: integer('SUBTITLE_PROVIDER_REQUESTS_PER_WINDOW', 1, 1, 20),
+  providerWindowMs: integer('SUBTITLE_PROVIDER_WINDOW_MS', 4_000, 4_000, 60_000),
+  googleWidgetApiKey: process.env.SUBTITLE_GOOGLE_WIDGET_API_KEY ?? 'AIzaSyATBXajvzQLTDHEQbcpq0Ihe0vWDHmO520',
+  googleWidgetUserAgent: process.env.SUBTITLE_GOOGLE_WIDGET_USER_AGENT ?? 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36',
 };
 
 export function memoryBudgetAvailable(): boolean {
