@@ -11,6 +11,16 @@
     "build:index": "node --import tsx tools/build-index.ts",
     "provider:sync": "node --import tsx tools/sync-provider-map.ts",
     "test:e2e": "node --import tsx --test tools/e2e.test.ts",
+    "subtitles:worker": "node --import tsx tools/subtitles-worker.ts",
+    "subtitles:index": "node --import tsx tools/subtitles-indexer.ts --watch",
+    "subtitles:index:seed": "node --import tsx tools/subtitles-indexer.ts --seed",
+    "telegram:sync": "node --import tsx tools/telegram-sync.ts --watch",
+    "telegram:sync:once": "node --import tsx tools/telegram-sync.ts --once",
+    "telegram:session": "node --import tsx tools/telegram-session.ts",
+    "telegram:catalog-import": "node --import tsx tools/telegram-catalog-import.ts",
+    "telegram:rematch": "node --import tsx tools/telegram-rematch.ts",
+    "subtitles:test": "node --import tsx --test src/lib/subtitles/tests/*.test.ts",
+    "subtitles:test:local": "node --import tsx --test src/lib/subtitles/tests/inference.test.ts",
     "deploy:worker": "wrangler deploy"
   },
   "dependencies": {
@@ -18,6 +28,8 @@
     "astro": "^5.0.0",
     "hls.js": "^1.5.17",
     "impit": "^0.14.9",
+    "input": "^1.0.1",
+    "telegram": "^2.26.22",
     "undici": "^8.12.4",
     "vidstack": "^1.12.13"
   },
