@@ -3,6 +3,7 @@ import nineanime from './nineanime';
 import reanime from './reanime';
 import allanime from './allanime';
 import anikoto from './anikoto';
+import telegram from './telegram';
 
 const providers = new Map<string, Provider>();
 const failures = new Map<string, number[]>();
@@ -16,6 +17,7 @@ register(nineanime);
 register(reanime);
 register(allanime);
 register(anikoto);
+register(telegram);
 
 export function isOpen(id: string): boolean {
   const until = openedUntil.get(id) ?? 0;
