@@ -4,6 +4,7 @@ import reanime from './reanime';
 import allanime from './allanime';
 import anikoto from './anikoto';
 import telegram from './telegram';
+import playtube from './playtube';
 
 const providers = new Map<string, Provider>();
 const failures = new Map<string, number[]>();
@@ -18,6 +19,7 @@ register(reanime);
 register(allanime);
 register(anikoto);
 register(telegram);
+register(playtube);
 
 export function isOpen(id: string): boolean {
   const until = openedUntil.get(id) ?? 0;
