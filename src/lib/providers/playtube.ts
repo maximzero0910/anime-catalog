@@ -1,5 +1,6 @@
 import { getTitles } from '../db';
 import { telegramAliases } from '../telegram/storage';
+import { BoundedTtlCache } from '../bounded-cache';
 import { httpGet, type AudioMode, type EpisodeRef, type Provider, type SearchHit, type StreamSource } from './types';
 
 export const BASE = 'https://playtube.tv';
@@ -7,9 +8,9 @@ export const CHANNEL = `${BASE}/@Belion`;
 const id = 'playtube';
 const cacheMs = 2 * 60_000;
 interface Video { id: string; url: string; title: string; series: string; num: number; season: number | null; }
-interface SearchCache { expires: number; videos: Video[]; }
-const searchCache = new Map<string, SearchCache>();
-const seriesCache = new Map<string, { expires: number; videos: Video[]; aliases: string[] }>();
+interface SeriesCache { videos: Video[]; aliases: string[] }
+const searchCache = new BoundedTtlCache<string, Video[]>(256);
+const seriesCache = new BoundedTtlCache<string, SeriesCache>(256);
 
 const normalize = (value: string) => value.toLocaleLowerCase().normalize('NFKD').replace(/\p{M}/gu, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 function htmlText(value: string): string {
@@ -65,10 +66,10 @@ function requestedTitleTerms(query: string): string[] {
 async function searchVideos(term: string): Promise<Video[]> {
   const key = normalize(term);
   const cached = searchCache.get(key);
-  if (cached && cached.expires > Date.now()) return cached.videos;
+  if (cached) return cached;
   const result = await httpGet(`${BASE}/search?keyword=${encodeURIComponent(term)}`, { provider: id, referer: CHANNEL, timeoutMs: 12_000 });
   const videos = extractChannelVideos(result.text);
-  searchCache.set(key, { expires: Date.now() + cacheMs, videos });
+  searchCache.set(key, videos, cacheMs);
   return videos;
 }
 
@@ -94,19 +95,19 @@ const playtube: Provider = {
       const series = items[0]!.series;
       const aliases = [...new Set([query, ...terms, series])];
       const hit: SearchHit = { id: seriesKey(series), title: series, alt: aliases.filter(alias => alias !== series) };
-      seriesCache.set(hit.id, { expires: Date.now() + cacheMs, videos: items, aliases });
+      seriesCache.set(hit.id, { videos: items, aliases }, cacheMs);
       if (key && normalize(series)) hits.push(hit);
     }
     return hits;
   },
   async listEpisodes(seriesId: string): Promise<EpisodeRef[]> {
     let cached = seriesCache.get(seriesId);
-    if (!cached || cached.expires <= Date.now()) {
+    if (!cached) {
       const series = decodeSeriesKey(seriesId);
       if (!series) return [];
       const videos = await searchVideos(series);
-      cached = { expires: Date.now() + cacheMs, videos: videos.filter(video => normalize(video.series) === series), aliases: [series] };
-      seriesCache.set(seriesId, cached);
+      cached = { videos: videos.filter(video => normalize(video.series) === series), aliases: [series] };
+      seriesCache.set(seriesId, cached, cacheMs);
     }
     return cached.videos.map(video => ({ num: video.num, id: video.url })).sort((a, b) => a.num - b.num);
   },

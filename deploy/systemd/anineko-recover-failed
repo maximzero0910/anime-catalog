@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+# Keep the recovery scope explicit. Never accept unit names from callers.
+for unit in anineko-web.service anineko-subtitles-worker.service anineko-telegram-sync.service; do
+  if systemctl is-failed --quiet "$unit"; then
+    logger --tag anineko-recovery -- "restart_attempt unit=$unit reason=systemd_failed_state"
+    if ! systemctl reset-failed "$unit"; then
+      logger --tag anineko-recovery -- "restart_failed unit=$unit stage=reset_failed"
+      continue
+    fi
+    if ! systemctl start "$unit"; then
+      logger --tag anineko-recovery -- "restart_failed unit=$unit stage=start"
+    fi
+  fi
+done

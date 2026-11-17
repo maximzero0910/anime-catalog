@@ -1,16 +1,18 @@
 import { discoverTracks, downloadTrack, resolveSubtitleSource, type SubtitleTrack } from '../src/lib/subtitles/acquire';
 import { subtitleConfig } from '../src/lib/subtitles/config';
 import { parseSubtitle } from '../src/lib/subtitles/normalize';
-import { addDeadLetter, claimJobs, claimUndiscoveredJobs, existingBulgarian, getJob, heartbeatJob, logJob, readBody, recordWorkerHeartbeat, recoverStaleJobs, saveBody, saveSubtitleHardsub, setWorkerControl, skipJobForNoSubtitleSource, storeValidatedArtifact, updateJob, workerConcurrency, workerControl, type Job } from '../src/lib/subtitles/storage';
+import { addDeadLetter, claimJobs, claimUndiscoveredJobs, existingBulgarian, getJob, heartbeatJob, logJob, pruneSubtitleOperationalData, readBody, recordWorkerHeartbeat, recoverStaleJobs, saveBody, saveSubtitleHardsub, setWorkerControl, skipJobForNoSubtitleSource, storeValidatedArtifact, updateJob, workerConcurrency, workerControl, type Job } from '../src/lib/subtitles/storage';
 import { enqueueEligible } from '../src/lib/subtitles/queue';
 import { SubtitleWorkerPause, SubtitleWorkerStop, translateSubtitleJob } from '../src/lib/subtitles/translate';
 import { nextProviderAvailableAt } from '../src/lib/subtitles/providers';
+import { startWorkerHeartbeat } from '../src/lib/worker-heartbeat';
 
 const args = process.argv.slice(2);
 const option = (name: string) => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : undefined; };
 const selectedAnime = option('--anime')?.split(',').map(Number).filter(Number.isSafeInteger);
 const cap = Math.min(subtitleConfig.queueCap, Number(option('--cap') || subtitleConfig.queueCap));
 const watch = args.includes('--watch');
+const stopApplicationHeartbeat = startWorkerHeartbeat('subtitle-worker');
 let stopping = false;
 recordWorkerHeartbeat();
 const workerHeartbeat = setInterval(() => recordWorkerHeartbeat(), 10_000);
@@ -28,6 +30,17 @@ async function saveNativeTrack(job: Job, track: SubtitleTrack, text: string): Pr
   logJob(job.id, 'info', 'provider_bulgarian_saved', { cues: parsed.cues.length, provider: track.provider });
 }
 async function discoverQueuedJob(job: Job): Promise<void> {
+  let lastHeartbeatErrorLog = 0;
+  const heartbeat = setInterval(() => {
+    try { heartbeatJob(job.id); }
+    catch (error) {
+      if (Date.now() - lastHeartbeatErrorLog >= 5 * 60_000) {
+        console.warn(JSON.stringify({ event: 'subtitle_job_lease_refresh_failed', jobId: job.id, reason: error instanceof Error ? error.message : String(error) }));
+        lastHeartbeatErrorLog = Date.now();
+      }
+    }
+  }, 15000);
+  heartbeat.unref();
   try {
     if (existingBulgarian(job.anime_id, Number(job.episode_id))) { updateJob(job.id, 'SKIPPED', { error: 'Validated Bulgarian subtitle already exists' }); return; }
     const candidates = await resolveSubtitleSource(job.anime_id, Number(job.episode_id));
@@ -77,11 +90,20 @@ async function discoverQueuedJob(job: Job): Promise<void> {
     updateJob(job.id, 'FAILED', { error: reason, availableAt: terminal ? Number.MAX_SAFE_INTEGER : Date.now() + backoff, lockedAt: null });
     logJob(job.id, 'error', terminal ? 'discovery_dead_lettered' : 'discovery_failed', { reason, retryInMs: terminal ? 0 : backoff });
     if (terminal) addDeadLetter(latest, reason);
-  }
+  } finally { clearInterval(heartbeat); }
 }
 async function runJob(job: Job): Promise<void> {
   const current = getJob(job.id)!;
-  const heartbeat = setInterval(() => heartbeatJob(job.id), 15000);
+  let lastHeartbeatErrorLog = 0;
+  const heartbeat = setInterval(() => {
+    try { heartbeatJob(job.id); }
+    catch (error) {
+      if (Date.now() - lastHeartbeatErrorLog >= 5 * 60_000) {
+        console.warn(JSON.stringify({ event: 'subtitle_job_lease_refresh_failed', jobId: job.id, reason: error instanceof Error ? error.message : String(error) }));
+        lastHeartbeatErrorLog = Date.now();
+      }
+    }
+  }, 15000);
   heartbeat.unref();
   try {
     if (existingBulgarian(job.anime_id, Number(job.episode_id))) {
@@ -161,6 +183,8 @@ async function runJob(job: Job): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const pruned = pruneSubtitleOperationalData();
+  if (Object.values(pruned).some(count => count > 0)) console.info({ event: 'subtitle_operational_data_pruned', ...pruned });
   if (args.includes('--enqueue') || args.length === 0) console.log(`Queue result: ${JSON.stringify(enqueueEligible({ animeIds: selectedAnime, cap }))}`);
   if (args.includes('--models')) { console.error('Local inference was removed from the subtitle worker; translations use configured online providers.'); process.exitCode = 2; return; }
   if (args.includes('--enqueue-only')) return;
@@ -182,8 +206,7 @@ async function main(): Promise<void> {
     }
     await Promise.all(jobs.map(runJob));
   }
-  setWorkerControl('running');
   console.log('Worker stopped cleanly.');
 }
 
-main().catch(error => { console.error(error instanceof Error ? error.stack : error); process.exitCode = 1; }).finally(() => { clearInterval(workerHeartbeat); recordWorkerHeartbeat(0); process.exit(); });
+main().catch(error => { console.error(error instanceof Error ? error.stack : error); process.exitCode = 1; }).finally(() => { stopApplicationHeartbeat(); clearInterval(workerHeartbeat); });

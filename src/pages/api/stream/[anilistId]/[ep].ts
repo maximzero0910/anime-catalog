@@ -9,6 +9,8 @@ import { isUsableSubtitleTrackUrl } from '../../../../lib/subtitle-track-url';
 import { getAniListAnime } from '../../../../lib/anilist';
 import { subtitleTitleAliases } from '../../../../lib/subtitles/storage';
 import { resolveProviderEpisode } from '../../../../lib/providers/title-resolver';
+import { proxySubtitleTracks } from '../../../../lib/hls-proxy';
+import { ResourceLimitError, withResourceLimit } from '../../../../lib/resource-limits';
 
 export const prerender = false;
 
@@ -66,8 +68,9 @@ export async function GET({ params, request }: { params: { anilistId?: string; e
         catch (error) { throw new ProviderError('empty', provider.id, error instanceof Error ? error.message : 'empty search'); }
       }
       if (!ref) throw new ProviderError('empty', provider.id, 'episode not found');
-      const sources = await provider.resolve(ref.id, mode);
-      const source = sources.find(item => (item.type === 'hls' && /^https?:\/\//i.test(item.url)) || (provider.id === 'playtube' && item.type === 'mp4'));
+      const sources = await withResourceLimit('provider-resolution', () => provider.resolve(ref!.id, mode), request.signal);
+      const playable = sources.filter(item => (item.type === 'hls' && /^https?:\/\//i.test(item.url)) || (provider.id === 'playtube' && item.type === 'mp4'));
+      const source = playable.find(item => item.subtitles.some(track => isUsableSubtitleTrackUrl(track.url))) ?? playable[0];
       if (!source || (source.type === 'hls' && !await verifyPlayablePlaylist(source.url, source.headers))) {
         throw new ProviderError('empty', provider.id, 'empty or invalid HLS');
       }
@@ -89,16 +92,40 @@ export async function GET({ params, request }: { params: { anilistId?: string; e
     }
   };
   try {
-    const source = await Promise.any(providers.map(resolveFromProvider));
+    const providerAttempts = new Map<string, Promise<Awaited<ReturnType<typeof resolveFromProvider>>>>();
+    const attempts = providers.map(provider => {
+      const attempt = resolveFromProvider(provider);
+      providerAttempts.set(provider.id, attempt);
+      return attempt;
+    });
+    let source = await Promise.any(attempts);
+    if (!source.subtitles.some(track => isUsableSubtitleTrackUrl(track.url))) {
+      const subtitleFallbacks = providers.filter(provider => provider.id !== source.provider).flatMap(provider => {
+        const attempt = providerAttempts.get(provider.id);
+        return attempt ? [attempt.then(candidate => {
+          if (!candidate.subtitles.some(track => isUsableSubtitleTrackUrl(track.url))) throw new ProviderError('empty', provider.id, 'provider returned no subtitle tracks');
+          return candidate;
+        })] : [];
+      });
+      const withSubtitles = await Promise.any(subtitleFallbacks).catch(() => null);
+      if (withSubtitles) source = withSubtitles;
+    }
     if (source.provider === 'playtube' && source.type === 'mp4') {
       const proxy = new URL('/api/hls', new URL(request.url).origin);
       proxy.searchParams.set('u', source.url);
       proxy.searchParams.set('r', source.headers.referer ?? 'https://playtube.tv/');
       return Response.json({ url: `${proxy.pathname}${proxy.search}`, type: source.type, quality: source.quality, headers: {}, subtitles: [], audio: source.audio, provider: source.provider, hardsub: 'bg' }, { headers: { 'cache-control': 'no-store' } });
     }
-    return Response.json({ url: source.url, type: source.type, quality: source.quality, headers: source.headers, subtitles: source.subtitles.filter(track => isUsableSubtitleTrackUrl(track.url)), audio: source.audio, provider: source.provider });
-  } catch {
+    const subtitles = proxySubtitleTracks(
+      source.subtitles.filter(track => isUsableSubtitleTrackUrl(track.url)),
+      source.headers.referer ?? `${new URL(source.url).origin}/`,
+    );
+    return Response.json({ url: source.url, type: source.type, quality: source.quality, headers: source.headers, subtitles, audio: source.audio, provider: source.provider }, { headers: { 'cache-control': 'no-store' } });
+  } catch (error) {
     if (!telegramFirst) { const source = await resolveTelegram(); if (source) return source; }
+    if (error instanceof ResourceLimitError || (error instanceof AggregateError && error.errors.some(item => item instanceof ResourceLimitError))) {
+      return Response.json({ error: 'service-overloaded', retryable: true }, { status: 503, headers: { 'cache-control': 'no-store', 'retry-after': '3' } });
+    }
     return Response.json({ error: 'empty', anilistId, episode, attempts }, { status: 502 });
   }
 }

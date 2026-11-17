@@ -2,21 +2,13 @@
   <div class="search-heading">
     <p class="eyebrow">ОТКРИЙ СЛЕДВАЩОТО СИ ЗАГЛАВИЕ</p>
     <h2 id="search-title">Търси в аниме каталога</h2>
-    <p class="muted">Търси сред заглавията на избрания източник и стеснявай по AniList метаданни.</p>
+    <p class="muted">Търси автоматично във всички налични видео източници и стеснявай по AniList метаданни.</p>
   </div>
   <form class="search-form" id="provider-form" role="search">
     <label class="sr-only" for="provider-query">Заглавие на анимето</label>
     <span class="search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><circle cx="10.8" cy="10.8" r="6.8" stroke="currentColor" stroke-width="1.8"/><path d="m16 16 5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>
     <input id="provider-query" name="q" type="search" autocomplete="off" placeholder="Cowboy Bebop, Frieren…" required />
-    <label class="sr-only" for="provider-name">Доставчик</label>
-    <select id="provider-name" aria-label="Доставчик">
-      <option value="anikoto">Anikoto</option>
-      <option value="animeworld">AnimeWorld</option>
-      <option value="animesaturn">AnimeSaturn</option>
-      <option value="reanime">Re:Anime</option>
-      <option value="gogoanime">Gogoanime</option>
-      <option value="miruro">Miruro</option>
-    </select>
+    <span class="search-scope" aria-label="Търсене във всички налични източници">Всички източници</span>
     <button class="search-submit" type="submit"><span>Търси</span><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     <button class="search-clear" id="search-clear" type="button" aria-label="Изчисти търсенето" title="Изчисти">×</button>
   </form>
@@ -73,13 +65,12 @@
 </section>
 
 <script>
-import { ConsumetError, filterProviderResults, searchProvider, type ConsumetSearchResult } from '../lib/consumet';
+import { ConsumetError, filterProviderResults, searchAllProviders, type ConsumetSearchResult } from '../lib/consumet';
 import type { CatalogFilters } from '../lib/catalog-filters';
 
 const form = document.querySelector<HTMLFormElement>('#provider-form');
 const filterArea = document.querySelector<HTMLElement>('.search-filter-area');
 const queryInput = document.querySelector<HTMLInputElement>('#provider-query');
-const providerSelect = document.querySelector<HTMLSelectElement>('#provider-name');
 const results = document.querySelector<HTMLDivElement>('#provider-results');
 const clearButton = document.querySelector<HTMLButtonElement>('#search-clear');
 const filterState = document.querySelector<HTMLElement>('[data-filter-state]');
@@ -94,9 +85,11 @@ const seasons: Record<string, string> = { WINTER: 'Winter', SPRING: 'Spring', SU
 const statuses: Record<string, string> = { RELEASING: 'Currently Airing', FINISHED: 'Finished', NOT_YET_RELEASED: 'Upcoming' };
 const formats: Record<string, string> = { SERIES: 'Series', MOVIE: 'Movie', SHORT: 'Short', SPECIAL: 'Special' };
 const sortLabels: Record<string, string> = { popularity: 'Popularity', rating: 'Highest Rated', recent: 'Most Recent', alphabetical: 'Alphabetical', added: 'Recently Added' };
+const providerNames: Record<string, string> = { anikoto: 'AniKoto', '9anime': '9Anime', reanime: 'Re:Anime', allanime: 'AllAnime', telegram: 'Telegram', playtube: 'PlayTube' };
 let rawResults: ConsumetSearchResult[] = [];
-let activeProvider = 'anikoto';
+let activeProvider = 'all';
 let activeQuery = '';
+let providerStatuses: Array<{ providerId: string; count: number; error?: string }> = [];
 let searchController: AbortController | undefined;
 let filterController: AbortController | undefined;
 let searchSequence = 0;
@@ -117,10 +110,14 @@ function makeAnimeCard(anime: ConsumetSearchResult, provider: string): HTMLEleme
   const animeTitle = typeof anime.title === 'string' ? anime.title : anime.title.english ?? anime.title.romaji ?? anime.title.native ?? 'Без заглавие';
   const poster = anime.image ?? anime.cover;
   const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-  const detailParams = new URLSearchParams({ provider, id: anime.id, title: animeTitle, returnTo, ...(anime.anilistId ? { anilistId: String(anime.anilistId) } : {}), ...(poster ? { image: poster } : {}) });
-  const detailUrl = `/provider-anime?${detailParams}`;
+  const providers = anime.providerChoices?.length ? anime.providerChoices : [{ providerId: provider, id: anime.id }];
+  const detailUrl = (source: { providerId: string; id: string }) => {
+    const detailParams = new URLSearchParams({ provider: source.providerId, id: source.id, title: animeTitle, returnTo, ...(anime.anilistId ? { anilistId: String(anime.anilistId) } : {}), ...(poster ? { image: poster } : {}) });
+    return `/provider-anime?${detailParams}`;
+  };
+  const primary = providers.find(source => source.providerId === provider) ?? providers[0]!;
   const card = document.createElement('article'); card.className = 'provider-card';
-  const posterLink = document.createElement('a'); posterLink.className = 'provider-poster-link'; posterLink.href = detailUrl; posterLink.setAttribute('aria-label', `Епизоди на ${animeTitle}`);
+  const posterLink = document.createElement('a'); posterLink.className = 'provider-poster-link'; posterLink.href = detailUrl(primary); posterLink.setAttribute('aria-label', `Епизоди на ${animeTitle}`);
   if (poster) {
     const image = document.createElement('img'); image.className = 'provider-poster'; image.src = poster; image.alt = `Постер: ${animeTitle}`; image.loading = 'lazy'; posterLink.append(image);
     image.addEventListener('error', () => { const placeholder = document.createElement('div'); placeholder.className = 'provider-poster poster-empty'; placeholder.setAttribute('aria-hidden', 'true'); image.replaceWith(placeholder); }, { once: true });
@@ -129,10 +126,15 @@ function makeAnimeCard(anime: ConsumetSearchResult, provider: string): HTMLEleme
   }
   card.append(posterLink);
   const body = document.createElement('div'); body.className = 'provider-card-body';
-  const title = document.createElement('h3'); const titleLink = document.createElement('a'); titleLink.className = 'provider-title-link'; titleLink.href = detailUrl; titleLink.textContent = animeTitle; title.append(titleLink);
-  const meta = document.createElement('p'); meta.className = 'provider-card-meta'; meta.textContent = [anime.year ?? anime.releaseDate, anime.type, anime.rating != null ? `★ ${anime.rating.toFixed(1)}` : '', ...(anime.genres ?? []).slice(0, 2), provider].filter(Boolean).join(' · ');
-  const episodesLink = document.createElement('a'); episodesLink.className = 'episode-select-link'; episodesLink.href = detailUrl; episodesLink.textContent = 'Избери епизод →';
-  body.append(title, meta, episodesLink); card.append(body); return card;
+  const title = document.createElement('h3'); const titleLink = document.createElement('a'); titleLink.className = 'provider-title-link'; titleLink.href = detailUrl(primary); titleLink.textContent = animeTitle; title.append(titleLink);
+  const meta = document.createElement('p'); meta.className = 'provider-card-meta'; meta.textContent = [anime.year ?? anime.releaseDate, anime.type, anime.rating != null ? `★ ${anime.rating.toFixed(1)}` : '', ...(anime.genres ?? []).slice(0, 2)].filter(Boolean).join(' · ');
+  const episodesLink = document.createElement('a'); episodesLink.className = 'episode-select-link'; episodesLink.href = detailUrl(primary); episodesLink.textContent = 'Избери епизод →';
+  const sourceLinks = document.createElement('div'); sourceLinks.className = 'provider-source-links'; sourceLinks.setAttribute('aria-label', 'Налични видео източници');
+  for (const source of providers) {
+    const label = providerNames[source.providerId] ?? source.providerId;
+    const link = document.createElement('a'); link.className = 'provider-source-link'; link.href = detailUrl(source); link.textContent = label; link.setAttribute('aria-label', `${animeTitle} в ${label}`); sourceLinks.append(link);
+  }
+  body.append(title, meta, episodesLink, sourceLinks); card.append(body); return card;
 }
 
 function readFilters(): CatalogFilters {
@@ -221,8 +223,12 @@ function renderResults(items: ConsumetSearchResult[]) {
     const message = document.createElement('p'); message.textContent = 'Премахни един или повече филтри или изчисти всичко, за да видиш резултатите отново.';
     const reset = document.createElement('button'); reset.type = 'button'; reset.className = 'clear-filters'; reset.textContent = 'Изчисти филтрите'; reset.addEventListener('click', resetFilters); empty.append(heading, message, reset); results.append(empty); return;
   }
-  const count = document.createElement('p'); count.className = 'result-count'; count.textContent = `${items.length} заглавия · ${activeProvider}`;
-  const grid = document.createElement('div'); grid.className = 'provider-grid'; for (const anime of items) grid.append(makeAnimeCard(anime, activeProvider)); results.append(count, grid);
+  const sourceCount = new Set(items.flatMap(item => item.providerChoices?.map(source => source.providerId) ?? (item.providerId ? [item.providerId] : []))).size;
+  const count = document.createElement('p'); count.className = 'result-count'; count.textContent = `${items.length} резултата от ${sourceCount} източника`;
+  const failed = providerStatuses.filter(status => status.error);
+  if (failed.length) { const note = document.createElement('p'); note.className = 'search-hint'; note.textContent = `${failed.length} източника временно не отговориха; показани са намерените резултати.`; results.append(count, note); }
+  else results.append(count);
+  const grid = document.createElement('div'); grid.className = 'provider-grid'; for (const anime of items) grid.append(makeAnimeCard(anime, anime.providerId ?? 'anikoto')); results.append(grid);
 }
 
 function signature() { return JSON.stringify([activeProvider, activeQuery, rawResults.map(item => item.id), readFilters()]); }
@@ -249,7 +255,7 @@ function resetFilters() {
 }
 function restoreURLState(): string {
   const params = new URLSearchParams(window.location.search); if (queryInput) queryInput.value = params.get('q') ?? '';
-  if (providerSelect && params.has('provider')) providerSelect.value = params.get('provider')!;
+  activeProvider = 'all';
   for (const value of params.getAll('genre')) assignChecked('genre', value, true);
   for (const value of params.getAll('type')) assignChecked('type', value, true);
   for (const key of ['year', 'yearFrom', 'yearTo', 'season', 'status', 'format', 'sort'] as const) { const value = params.get(key); if (value) assignValue(key, value); }
@@ -257,22 +263,22 @@ function restoreURLState(): string {
   if (ratingInput && params.has('minRating')) ratingInput.value = params.get('minRating')!; updateFilterUI(); return params.get('q') ?? '';
 }
 async function search(query: string) {
-  if (!queryInput || !providerSelect || !results || !query.trim()) return;
-  activeQuery = query.trim(); activeProvider = providerSelect.value; searchController?.abort(); filterController?.abort();
+  if (!queryInput || !results || !query.trim()) return;
+  activeQuery = query.trim(); activeProvider = 'all'; searchController?.abort(); filterController?.abort();
   const controller = new AbortController(); searchController = controller; const sequence = ++searchSequence;
   rawResults = []; lastFilterKey = ''; results.setAttribute('aria-busy', 'true'); renderSkeletons(); saveURLState();
   try {
-    const data = await searchProvider(activeProvider, activeQuery, controller.signal);
+    const data = await searchAllProviders(activeQuery, controller.signal);
     if (controller.signal.aborted || sequence !== searchSequence) return;
     rawResults = data.results ?? [];
-    if (!rawResults.length) { results.replaceChildren(); const empty = document.createElement('p'); empty.className = 'search-message'; empty.textContent = `Няма резултати за „${activeQuery}“ при ${activeProvider}.`; results.append(empty); return; }
+    providerStatuses = data.providers ?? [];
+    if (!rawResults.length) { results.replaceChildren(); const empty = document.createElement('p'); empty.className = 'search-message'; empty.textContent = `Няма резултати за „${activeQuery}“ в наличните източници.`; results.append(empty); return; }
     await applyFilters(true);
   } catch (error) { if (!controller.signal.aborted && sequence === searchSequence) results.replaceChildren(showError(error)); }
   finally { if (sequence === searchSequence) results.setAttribute('aria-busy', 'false'); }
 }
 
 form?.addEventListener('submit', event => { event.preventDefault(); if (queryInput) void search(queryInput.value); });
-providerSelect?.addEventListener('change', () => { if (activeQuery) void search(activeQuery); });
 filterArea?.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[name="genre"], [name="type"], [name="year"], [name="yearFrom"], [name="yearTo"], [name="recent"], [name="season"], [name="status"], [name="format"], [name="minRating"], [name="sort"]').forEach(control => {
   control.addEventListener(control instanceof HTMLInputElement && control.type === 'range' ? 'input' : 'change', () => {
     if (control.name === 'year') { assignValue('yearFrom', ''); assignValue('yearTo', ''); }

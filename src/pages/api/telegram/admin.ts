@@ -2,6 +2,9 @@ import { getTitles } from '../../../lib/db';
 import { associateTelegramMessage, matchedTelegramEpisodes, rejectTelegramMatch, telegramAdminMessages, telegramStats, updateTelegramSyncState, upsertTelegramAlias } from '../../../lib/telegram/storage';
 import { matchTelegramMessage } from '../../../lib/telegram/matching';
 import { adminAuthorized, adminTokenConfigured } from '../../../lib/admin-auth';
+import { workerHeartbeats } from '../../../lib/worker-heartbeat';
+import { readJsonBody, RequestBodyError } from '../../../lib/request-body';
+import { telegramMediaPoolStatus } from '../../../lib/telegram/client';
 
 export const prerender = false;
 
@@ -14,12 +17,13 @@ function unauthorizedResponse(): Response {
 }
 export async function GET({ request }: { request: Request }): Promise<Response> {
   if (!adminAuthorized(request, process.env.TELEGRAM_ADMIN_TOKEN)) return unauthorizedResponse();
-  return Response.json({ status: telegramStats(), messages: telegramAdminMessages(), titles: getTitles().map(title => ({ id: title.id, name: title.english ?? title.romaji ?? title.native ?? String(title.id) })) }, { headers: { 'cache-control': 'no-store' } });
+  return Response.json({ status: telegramStats(), mediaPool: telegramMediaPoolStatus(), worker: workerHeartbeats().find(item => item.worker === 'telegram-sync') ?? null, messages: telegramAdminMessages(), titles: getTitles().map(title => ({ id: title.id, name: title.english ?? title.romaji ?? title.native ?? String(title.id) })) }, { headers: { 'cache-control': 'no-store' } });
 }
 export async function POST({ request }: { request: Request }): Promise<Response> {
   if (!adminAuthorized(request, process.env.TELEGRAM_ADMIN_TOKEN)) return unauthorizedResponse();
   let body: Record<string, unknown>;
-  try { body = await request.json() as Record<string, unknown>; } catch { return Response.json({ error: 'invalid-json' }, { status: 400 }); }
+  try { body = await readJsonBody<Record<string, unknown>>(request, 64 * 1024); }
+  catch (error) { return Response.json({ error: error instanceof Error ? error.message : 'invalid-json' }, { status: error instanceof RequestBodyError ? error.status : 400 }); }
   try {
     if (body.action === 'sync') {
       if (!Boolean(telegramStats().connectionConfigured)) return Response.json({ error: 'Telegram credentials or channel are missing' }, { status: 503 });

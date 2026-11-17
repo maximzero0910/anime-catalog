@@ -1,11 +1,12 @@
 import Database from 'better-sqlite3';
-import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, open, readFile, realpath, rename, rm } from 'node:fs/promises';
+import { dirname, relative, resolve, sep } from 'node:path';
 import { subtitleConfig } from './config';
+import { catalogDatabasePath } from '../catalog-path';
 
 export type JobState = 'DISCOVERED' | 'QUEUED' | 'DOWNLOADING' | 'NORMALIZING' | 'TRANSLATING' | 'VALIDATING' | 'COMPLETED' | 'FAILED' | 'SKIPPED';
-const dbPath = resolve(process.env.CATALOG_DB_PATH ?? 'data/catalog.db');
+const dbPath = catalogDatabasePath();
 const bodyRoot = resolve(subtitleConfig.dataDirectory);
 const database = new Database(dbPath, { timeout: 5000 });
 database.pragma('journal_mode = WAL');
@@ -204,7 +205,16 @@ export function recordSubtitleAssetBody(hash: string, path: string, format: stri
 export async function readSubtitleAsset(hash: string): Promise<{ body: string; asset: Record<string, unknown> } | undefined> {
   const asset = database.prepare('SELECT * FROM subtitle_assets WHERE content_hash=?').get(hash) as Record<string, unknown> | undefined;
   if (!asset) return undefined;
-  try { return { body: await readFile(String(asset.storage_path), 'utf8'), asset }; } catch { return undefined; }
+  let body: string;
+  try { body = await readBody(String(asset.storage_path)); }
+  catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return undefined;
+    throw error;
+  }
+  const bodyHash = createHash('sha256').update(body).digest('hex');
+  if (bodyHash !== hash || bodyHash !== String(asset.content_hash)) throw new Error(`Indexed subtitle asset hash mismatch: ${hash}`);
+  if (Buffer.byteLength(body) !== Number(asset.byte_length)) throw new Error(`Indexed subtitle asset size mismatch: ${hash}`);
+  return { body, asset };
 }
 
 export function upsertSubtitleIndex(input: SubtitleIndexInput): number {
@@ -259,7 +269,7 @@ export function resolveIndexedSubtitle(animeId: string, episode: number, languag
     ORDER BY i.catalog_only ASC,i.verified DESC,i.quality_score DESC,i.discovered_at DESC`).all(language, episode, animeId, normalized, normalized) as Array<Record<string, unknown>>;
 }
 export function indexedSubtitleRows(animeId: string, episode: number): Array<Record<string, unknown>> {
-  return database.prepare('SELECT provider,quality_score FROM subtitle_index WHERE anime_id=? AND episode_number=?').all(animeId, episode) as Array<Record<string, unknown>>;
+  return database.prepare('SELECT provider,provider_id,quality_score FROM subtitle_index WHERE anime_id=? AND episode_number=?').all(animeId, episode) as Array<Record<string, unknown>>;
 }
 
 export function providerMissActive(animeId: string, episode: number, provider: string, now = Date.now()): boolean {
@@ -267,6 +277,25 @@ export function providerMissActive(animeId: string, episode: number, provider: s
 }
 export function recordProviderMiss(animeId: string, episode: number, provider: string, ttlMs = 7 * 24 * 60 * 60_000): void {
   database.prepare(`INSERT INTO subtitle_provider_misses(anime_id,episode_number,provider,expires_at) VALUES(?,?,?,?) ON CONFLICT(anime_id,episode_number,provider) DO UPDATE SET expires_at=excluded.expires_at`).run(animeId, episode, provider, Date.now() + ttlMs);
+  database.prepare('DELETE FROM subtitle_provider_misses WHERE expires_at<=?').run(Date.now());
+}
+export function syncSubtitleProviderEnabled(provider: string, enabled: boolean): number {
+  if (!/^[a-z0-9-]{1,64}$/.test(provider)) throw new Error('invalid subtitle provider id');
+  const key = `provider-enabled:${provider}`;
+  const sync = database.transaction(() => {
+    const previous = database.prepare('SELECT value FROM subtitle_indexer_settings WHERE key=?').get(key) as { value: string } | undefined;
+    let requeued = 0;
+    if (enabled && previous?.value !== 'enabled') {
+      requeued = database.prepare(`UPDATE subtitle_index_jobs SET state='QUEUED',attempts=0,available_at=0,locked_at=NULL,error=NULL,updated_at=?
+        WHERE state IN ('COMPLETED','FAILED') AND EXISTS (
+          SELECT 1 FROM subtitle_provider_misses m WHERE m.provider=? AND m.anime_id=subtitle_index_jobs.anime_id AND m.episode_number=subtitle_index_jobs.episode_number
+        )`).run(nowIso(), provider).changes;
+      database.prepare('DELETE FROM subtitle_provider_misses WHERE provider=?').run(provider);
+    }
+    database.prepare(`INSERT INTO subtitle_indexer_settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).run(key, enabled ? 'enabled' : 'disabled', nowIso());
+    return requeued;
+  }).immediate;
+  return sync();
 }
 export function enqueueSubtitleIndexJob(input: { animeId: string; episode: number; season?: number | null; videoHash?: string | null; releaseGroup?: string | null; durationMs?: number | null }): boolean {
   const now = nowIso();
@@ -287,11 +316,25 @@ export function claimSubtitleIndexJobs(limit: number, now = Date.now()): Array<R
     const update = database.prepare(`UPDATE subtitle_index_jobs SET state='RUNNING',attempts=attempts+1,locked_at=?,updated_at=? WHERE id=? AND state IN ('QUEUED','FAILED')`);
     for (const job of jobs) update.run(now, nowIso(), job.id);
     return jobs.map(job => database.prepare('SELECT * FROM subtitle_index_jobs WHERE id=?').get(job.id) as Record<string, unknown>);
-  });
+  }).immediate;
   return claim();
 }
 export function recoverStaleSubtitleIndexJobs(staleMs = 30 * 60_000, now = Date.now()): number {
-  return database.prepare(`UPDATE subtitle_index_jobs SET state='QUEUED',locked_at=NULL,available_at=?,error='Recovered after stale indexer lock',updated_at=? WHERE state='RUNNING' AND locked_at IS NOT NULL AND locked_at<?`).run(now, nowIso(), now - staleMs).changes;
+  const cutoff = now - staleMs;
+  const recover = database.transaction(() => {
+    const stale = database.prepare(`SELECT id,attempts FROM subtitle_index_jobs WHERE state='RUNNING' AND locked_at IS NOT NULL AND locked_at<?`).all(cutoff) as Array<{ id: number; attempts: number }>;
+    const update = database.prepare(`UPDATE subtitle_index_jobs SET state=?,locked_at=NULL,available_at=?,error=?,updated_at=? WHERE id=? AND state='RUNNING' AND locked_at<?`);
+    for (const job of stale) {
+      const terminal = job.attempts >= 5;
+      const reason = terminal ? 'Recovered after stale indexer lock; retry ceiling (5) reached' : 'Recovered after stale indexer lock';
+      update.run(terminal ? 'FAILED' : 'QUEUED', terminal ? Number.MAX_SAFE_INTEGER : now, reason, nowIso(), job.id, cutoff);
+    }
+    return stale.length;
+  }).immediate;
+  return recover();
+}
+export function heartbeatSubtitleIndexJob(id: number, now = Date.now()): void {
+  database.prepare(`UPDATE subtitle_index_jobs SET locked_at=?,updated_at=? WHERE id=? AND state='RUNNING'`).run(now, nowIso(), id);
 }
 export function finishSubtitleIndexJob(id: number, error?: string): void {
   const row = database.prepare('SELECT attempts FROM subtitle_index_jobs WHERE id=?').get(id) as { attempts: number } | undefined;
@@ -300,12 +343,37 @@ export function finishSubtitleIndexJob(id: number, error?: string): void {
   const backoff = Math.min(24 * 60 * 60_000, 30_000 * (2 ** Math.max(0, row.attempts - 1)));
   database.prepare('UPDATE subtitle_index_jobs SET state=?,error=?,locked_at=NULL,available_at=?,updated_at=? WHERE id=?').run(error ? (terminal ? 'FAILED' : 'QUEUED') : 'COMPLETED', error ?? null, error ? Date.now() + backoff : 0, nowIso(), id);
 }
+const HTTP_CACHE_MAX_BODY_BYTES = 2 * 1024 * 1024;
+const HTTP_CACHE_MAX_ROWS = 1000;
+const HTTP_CACHE_TTL_MS = 30 * 24 * 60 * 60_000;
+let httpCacheWrites = 0;
 export function indexerHttpCache(key: string): { etag: string | null; lastModified: string | null; body: string | null; status: number | null } | undefined {
   const row = database.prepare('SELECT etag,last_modified,response_body,response_status FROM subtitle_provider_http_cache WHERE cache_key=?').get(key) as { etag: string | null; last_modified: string | null; response_body: string | null; response_status: number | null } | undefined;
   return row && { etag: row.etag, lastModified: row.last_modified, body: row.response_body, status: row.response_status };
 }
 export function saveIndexerHttpCache(key: string, input: { etag?: string | null; lastModified?: string | null; body?: string | null; status?: number | null }): void {
-  database.prepare(`INSERT INTO subtitle_provider_http_cache(cache_key,etag,last_modified,response_body,response_status,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(cache_key) DO UPDATE SET etag=COALESCE(excluded.etag,subtitle_provider_http_cache.etag),last_modified=COALESCE(excluded.last_modified,subtitle_provider_http_cache.last_modified),response_body=COALESCE(excluded.response_body,subtitle_provider_http_cache.response_body),response_status=COALESCE(excluded.response_status,subtitle_provider_http_cache.response_status),updated_at=excluded.updated_at`).run(key, input.etag ?? null, input.lastModified ?? null, input.body ?? null, input.status ?? null, nowIso());
+  const body = input.body && Buffer.byteLength(input.body) <= HTTP_CACHE_MAX_BODY_BYTES ? input.body : null;
+  database.prepare(`INSERT INTO subtitle_provider_http_cache(cache_key,etag,last_modified,response_body,response_status,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(cache_key) DO UPDATE SET etag=COALESCE(excluded.etag,subtitle_provider_http_cache.etag),last_modified=COALESCE(excluded.last_modified,subtitle_provider_http_cache.last_modified),response_body=COALESCE(excluded.response_body,subtitle_provider_http_cache.response_body),response_status=COALESCE(excluded.response_status,subtitle_provider_http_cache.response_status),updated_at=excluded.updated_at`).run(key, input.etag ?? null, input.lastModified ?? null, body, input.status ?? null, nowIso());
+  httpCacheWrites++;
+  if (httpCacheWrites % 25 === 0) {
+    const cutoff = new Date(Date.now() - HTTP_CACHE_TTL_MS).toISOString();
+    database.prepare('DELETE FROM subtitle_provider_http_cache WHERE updated_at<?').run(cutoff);
+    database.prepare(`DELETE FROM subtitle_provider_http_cache WHERE cache_key IN (SELECT cache_key FROM subtitle_provider_http_cache ORDER BY updated_at DESC LIMIT -1 OFFSET ?)` ).run(HTTP_CACHE_MAX_ROWS);
+  }
+}
+
+export function pruneSubtitleOperationalData(now = Date.now(), retentionDays = subtitleConfig.logRetentionDays, maxLogRows = subtitleConfig.maxLogRows): { expiredProviderMisses: number; expiredHttpCache: number; expiredLogs: number; excessLogs: number } {
+  const cutoff = new Date(now - retentionDays * 24 * 60 * 60_000).toISOString();
+  const transaction = database.transaction(() => {
+    const expiredProviderMisses = database.prepare('DELETE FROM subtitle_provider_misses WHERE expires_at<=?').run(now).changes;
+    const expiredHttpCache = database.prepare('DELETE FROM subtitle_provider_http_cache WHERE updated_at<?').run(new Date(now - HTTP_CACHE_TTL_MS).toISOString()).changes;
+    const expiredLogs = database.prepare('DELETE FROM subtitle_job_logs WHERE created_at<?').run(cutoff).changes;
+    const currentLogs = Number((database.prepare('SELECT COUNT(*) AS count FROM subtitle_job_logs').get() as { count: number }).count);
+    const excessLogs = Math.max(0, currentLogs - maxLogRows);
+    if (excessLogs) database.prepare(`DELETE FROM subtitle_job_logs WHERE id IN (SELECT id FROM subtitle_job_logs ORDER BY id ASC LIMIT ?)` ).run(excessLogs);
+    return { expiredProviderMisses, expiredHttpCache, expiredLogs, excessLogs };
+  }).immediate;
+  return transaction();
 }
 export function subtitleIndexStats(): Record<string, number> {
   const rows = database.prepare(`SELECT provider,COUNT(*) AS count,SUM(CASE WHEN catalog_only=1 THEN 1 ELSE 0 END) AS catalog_only,SUM(CASE WHEN asset_hash IS NOT NULL THEN 1 ELSE 0 END) AS assets FROM subtitle_index GROUP BY provider`).all() as Array<{ provider: string; count: number; catalog_only: number; assets: number }>;
@@ -359,10 +427,25 @@ export function updateJob(id: number, status: JobState, patch: { sourceLanguage?
 export function logJob(jobId: number, level: 'info' | 'warn' | 'error', event: string, details: Record<string, unknown> = {}): void {
   database.prepare('INSERT INTO subtitle_job_logs(job_id,created_at,level,event,details) VALUES(?,?,?,?,?)').run(jobId, nowIso(), level, event, JSON.stringify(details));
 }
-export function recoverStaleJobs(staleMs: number): number {
-  const now = Date.now();
-  const result = database.prepare(`UPDATE subtitle_jobs SET status='QUEUED',locked_at=NULL,available_at=?,updated_at=?,error='Recovered after stale worker lock' WHERE status IN ('DOWNLOADING','NORMALIZING','TRANSLATING','VALIDATING') AND locked_at IS NOT NULL AND locked_at < ?`).run(now, nowIso(), now - staleMs);
-  return result.changes;
+export function recoverStaleJobs(staleMs: number, now = Date.now()): number {
+  const cutoff = now - staleMs;
+  const maximumAttempts = subtitleConfig.retryCount + 3;
+  const recover = database.transaction(() => {
+    const stale = database.prepare(`SELECT * FROM subtitle_jobs WHERE status IN ('DOWNLOADING','NORMALIZING','TRANSLATING','VALIDATING') AND locked_at IS NOT NULL AND locked_at < ?`).all(cutoff) as Array<Record<string, unknown>>;
+    const update = database.prepare(`UPDATE subtitle_jobs SET status=?,locked_at=NULL,available_at=?,updated_at=?,error=? WHERE id=? AND status IN ('DOWNLOADING','NORMALIZING','TRANSLATING','VALIDATING') AND locked_at < ?`);
+    for (const row of stale) {
+      const job = fromRow(row);
+      const terminal = job.attempts >= maximumAttempts;
+      const reason = terminal ? `Recovered after stale worker lock; retry ceiling (${maximumAttempts}) reached` : 'Recovered after stale worker lock';
+      update.run(terminal ? 'FAILED' : 'QUEUED', terminal ? Number.MAX_SAFE_INTEGER : now, nowIso(), reason, job.id, cutoff);
+      if (terminal) {
+        addDeadLetter({ ...job, status: 'FAILED', error: reason, locked_at: null, available_at: Number.MAX_SAFE_INTEGER }, reason);
+        logJob(job.id, 'error', 'stale_job_dead_lettered', { attempts: job.attempts, retryCeiling: maximumAttempts });
+      } else logJob(job.id, 'warn', 'stale_job_recovered', { attempts: job.attempts });
+    }
+    return stale.length;
+  }).immediate;
+  return recover();
 }
 export type WorkerControl = 'running' | 'paused' | 'stopping';
 export function workerControl(): WorkerControl { const row = database.prepare(`SELECT value FROM subtitle_worker_settings WHERE key='control'`).get() as { value: string } | undefined; return (row?.value as WorkerControl) ?? 'running'; }
@@ -392,7 +475,7 @@ export function claimJobs(limit: number): Job[] {
     const update = database.prepare(`UPDATE subtitle_jobs SET status='DOWNLOADING',locked_at=?,updated_at=?,attempts=attempts+1 WHERE id=? AND status IN ('QUEUED','FAILED')`);
     for (const row of rows) update.run(now, nowIso(), row.id);
     return rows.map(row => getJob(Number(row.id))!).filter(job => job.status === 'DOWNLOADING');
-  });
+  }).immediate;
   return transaction();
 }
 export function claimUndiscoveredJobs(limit: number): Job[] {
@@ -402,7 +485,7 @@ export function claimUndiscoveredJobs(limit: number): Job[] {
     const update = database.prepare(`UPDATE subtitle_jobs SET status='DOWNLOADING',locked_at=?,updated_at=?,attempts=attempts+1 WHERE id=? AND status='QUEUED' AND source_language IS NULL`);
     for (const row of rows) update.run(now, nowIso(), row.id);
     return rows.map(row => getJob(Number(row.id))!).filter(job => job.status === 'DOWNLOADING');
-  });
+  }).immediate;
   return transaction();
 }
 export function saveBody(content: string, extension: string): Promise<{ hash: string; path: string }> {
@@ -410,16 +493,55 @@ export function saveBody(content: string, extension: string): Promise<{ hash: st
   const safeExt = extension.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'txt';
   const path = resolve(bodyRoot, contentHash.slice(0, 2), `${contentHash}.${safeExt}`);
   return mkdir(dirname(path), { recursive: true }).then(async () => {
-    try { await readFile(path); } catch {
-      const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
-      await writeFile(temporary, content, { encoding: 'utf8', flag: 'wx' });
-      try { await rename(temporary, path); } catch (error) { await import('node:fs/promises').then(fs => fs.rm(temporary, { force: true })); try { await readFile(path); } catch { throw error; } }
+    const verifyExisting = async (): Promise<boolean> => {
+      try {
+        const existing = await readFile(path);
+        if (createHash('sha256').update(existing).digest('hex') !== contentHash) throw new Error(`Content-addressed subtitle body failed integrity check: ${path}`);
+        return true;
+      } catch (error) {
+        if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return false;
+        throw error;
+      }
+    };
+    if (await verifyExisting()) return { hash: contentHash, path };
+
+    // DECISION: write and sync a unique sibling before rename so crashes never expose a partial body at its content-addressed path.
+    const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+    let handle: Awaited<ReturnType<typeof open>> | undefined;
+    try {
+      handle = await open(temporary, 'wx', 0o600);
+      await handle.writeFile(content, 'utf8');
+      await handle.sync();
+      await handle.close();
+      handle = undefined;
+      try { await rename(temporary, path); }
+      catch (error) {
+        if (!await verifyExisting()) throw error;
+        await rm(temporary, { force: true });
+      }
+      if (!await verifyExisting()) throw new Error('Subtitle body disappeared immediately after atomic write');
+      return { hash: contentHash, path };
+    } catch (error) {
+      await handle?.close().catch(() => undefined);
+      await rm(temporary, { force: true }).catch(() => undefined);
+      throw error;
     }
-    return { hash: contentHash, path };
   });
 }
-export async function readBody(path: string): Promise<string> { return readFile(resolve(bodyRoot, path), 'utf8'); }
-export function relativeBodyPath(path: string): string { return path.startsWith(`${bodyRoot}/`) ? path.slice(bodyRoot.length + 1) : path; }
+function resolveBodyPath(path: string): string {
+  const candidate = resolve(bodyRoot, path);
+  const fromRoot = relative(bodyRoot, candidate);
+  if (!fromRoot || fromRoot === '..' || fromRoot.startsWith(`..${sep}`)) throw new Error('Subtitle body path is outside the configured asset directory');
+  return candidate;
+}
+export async function readBody(path: string): Promise<string> {
+  const candidate = resolveBodyPath(path);
+  const [realRoot, realCandidate] = await Promise.all([realpath(bodyRoot), realpath(candidate)]);
+  const relativePath = relative(realRoot, realCandidate);
+  if (!relativePath || relativePath === '..' || relativePath.startsWith(`..${sep}`)) throw new Error('Subtitle body path resolves outside the configured asset directory');
+  return readFile(realCandidate, 'utf8');
+}
+export function relativeBodyPath(path: string): string { return relative(bodyRoot, resolveBodyPath(path)); }
 export function storeValidatedArtifact(input: { animeId: number; seasonId: string | null; episodeId: string; sourceLanguage: string; targetLanguage: string; sourceHash: string; model: string; configHash?: string; translationVersion?: string; sourceFormat: string; translatedFormat: string; sourcePath: string; translatedPath: string; score: number }): number {
   const configHash = input.configHash ?? `native:${input.model}`;
   const insert = database.prepare(`INSERT INTO subtitle_artifacts(anime_id,season_id,episode_id,source_language,target_language,source_hash,model,translation_version,config_hash,created_at,validation_status,source_format,translated_format,source_path,translated_path,score) VALUES(@animeId,@seasonId,@episodeId,@sourceLanguage,@targetLanguage,@sourceHash,@model,@version,@configHash,@createdAt,'validated',@sourceFormat,@translatedFormat,@sourcePath,@translatedPath,@score) ON CONFLICT(anime_id,episode_id,source_hash,target_language,config_hash) DO NOTHING`);

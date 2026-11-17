@@ -29,6 +29,8 @@ export const subtitleConfig = {
   queueCap: integer('SUBTITLE_QUEUE_CAP', 100, 1, 10000),
   retryDelayMs: integer('SUBTITLE_RETRY_BASE_MS', 10000, 1000, 3600000),
   staleLockMs: integer('SUBTITLE_STALE_LOCK_MS', 30 * 60_000, 60_000, 24 * 60 * 60_000),
+  logRetentionDays: integer('SUBTITLE_LOG_RETENTION_DAYS', 180, 7, 3650),
+  maxLogRows: integer('SUBTITLE_LOG_MAX_ROWS', 100_000, 1000, 1_000_000),
   dataDirectory: process.env.SUBTITLE_DATA_DIR ?? 'data/subtitles',
   targetLanguage: 'bg',
   translationVersion: '3',

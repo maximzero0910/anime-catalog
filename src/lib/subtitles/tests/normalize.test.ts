@@ -77,3 +77,11 @@ test('QA allows short retained character or organization names within Bulgarian 
   const translated = { ...source, cues: source.cues.map(cue => ({ ...cue, originalText: 'Семейството ѝ притежава Shinomiya Group' })) };
   assert.equal(validateTranslation(source, translated, []).valid, true);
 });
+
+test('normalizer rejects oversized input, cue counts, and individual cue payloads', () => {
+  assert.throws(() => parseSubtitle('x'.repeat(8 * 1024 * 1024 + 1), 'srt'), /exceeds 8388608 bytes/);
+  const manyCues = Array.from({ length: 20_001 }, (_, index) => `${index + 1}\n00:00:01,000 --> 00:00:02,000\nLine\n`).join('\n');
+  assert.throws(() => parseSubtitle(manyCues, 'srt'), /exceeds 20000 cues/);
+  const longCue = `1\n00:00:01,000 --> 00:00:02,000\n${'x'.repeat(8_193)}\n`;
+  assert.throws(() => parseSubtitle(longCue, 'srt'), /cue exceeds 8192 characters/);
+});

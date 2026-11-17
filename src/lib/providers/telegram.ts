@@ -1,6 +1,6 @@
 import { getTitles } from '../db';
 import { freshTelegramVideo, getTelegramChannel, getTelegramClient, telegramConfigured } from '../telegram/client';
-import { getPlayableTelegramMessage, matchedTelegramEpisodes } from '../telegram/storage';
+import { getPlayableTelegramMessage, matchedTelegramEpisodes, playableTelegramAnimeIds } from '../telegram/storage';
 import type { AudioMode, EpisodeRef, Provider, SearchHit, StreamSource } from './types';
 
 const priority = Number(process.env.TELEGRAM_PROVIDER_PRIORITY ?? 10);
@@ -9,10 +9,11 @@ const provider: Provider = {
   async searchByTitle(query: string): Promise<SearchHit[]> {
     const normalize = (value: string) => value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
     const q = normalize(query);
-    if (!q) return [];
+    if (q.length < 2) return [];
+    const playableIds = new Set(playableTelegramAnimeIds());
     return getTitles()
-      .filter(title => [title.english, title.romaji, title.native, title.title_bg].some(value => Boolean(value && (normalize(value) === q || normalize(value).includes(q) || q.includes(normalize(value))))))
-      .map(title => ({ id: String(title.id), title: title.english ?? title.romaji ?? title.native ?? String(title.id), alt: [title.romaji, title.native, title.title_bg].filter((value): value is string => Boolean(value)) }));
+      .filter(title => playableIds.has(title.id) && [title.english, title.romaji, title.native, title.title_bg].some(value => Boolean(value && (normalize(value) === q || normalize(value).includes(q) || q.includes(normalize(value))))))
+      .map(title => ({ id: String(title.id), title: title.english ?? title.romaji ?? title.native ?? String(title.id), alt: [title.romaji, title.native, title.title_bg].filter((value): value is string => Boolean(value)), ...(title.cover ? { image: title.cover } : {}) }));
   },
   async listEpisodes(seriesId: string): Promise<EpisodeRef[]> {
     return matchedTelegramEpisodes(Number(seriesId)).filter(row => row.status === 'MATCHED' && Number(row.verified) === 1 && Number(row.primary_match) === 1).map(row => ({ num: Number(row.episode_number), id: String(row.message_id) })).sort((a, b) => a.num - b.num);

@@ -2,6 +2,7 @@ import { getTitleById } from '../../../../lib/db';
 import { ordered } from '../../../../lib/providers';
 import { getTelegramEpisode } from '../../../../lib/telegram/storage';
 import type { Provider, SearchHit } from '../../../../lib/providers/types';
+import { withResourceLimit } from '../../../../lib/resource-limits';
 
 export const prerender = false;
 
@@ -36,13 +37,14 @@ export async function GET({ params }: { params: { animeId?: string; episode?: st
   if (telegram) options.push({ provider: 'telegram', label: labels.telegram!, episodeId: String(telegram.message_id), hardsub: 'bg' });
   const providers = ordered().filter(provider => provider.id !== 'telegram');
   const found = await Promise.allSettled(providers.map(async provider => {
-    return withTimeout((async () => {
+    const work = withResourceLimit('provider-resolution', async () => {
       const hit = await titleMatch(provider, name, aliases);
       if (!hit) return null;
       const refs = await provider.listEpisodes(hit.id);
       const ref = refs.find(item => item.num === episode);
       return ref ? { provider: provider.id, label: labels[provider.id] ?? provider.id, episodeId: ref.id } : null;
-    })(), 12_000);
+    });
+    return withTimeout(work, 12_000);
   }));
   for (const result of found) if (result.status === 'fulfilled' && result.value) options.push(result.value);
   return Response.json({ animeId, episode, title: name, options }, { headers: { 'cache-control': 'private, max-age=60' } });

@@ -104,11 +104,9 @@ import Brand from '../components/Brand.astro';
         const subheading = document.createElement('p'); subheading.textContent = `Епизод ${episode.number}`;
         info.append(heading, subheading);
         const actions = document.createElement('div'); actions.className = 'provider-episode-actions';
-        if (provider === 'anikoto') {
-          const watchParams = new URLSearchParams({ provider, animeId: seriesId, episodeId: episode.id, number: String(episode.number), title, ...(anilistId ? { anilistId } : {}) });
-          const watch = document.createElement('a'); watch.className = 'button-primary provider-watch-button'; watch.href = `/provider-watch?${watchParams}`; watch.textContent = 'Гледай';
-          actions.append(watch);
-        }
+        const watchParams = new URLSearchParams({ provider, animeId: seriesId, episodeId: episode.id, number: String(episode.number), title, ...(anilistId ? { anilistId } : {}) });
+        const watch = document.createElement('a'); watch.className = 'button-primary provider-watch-button'; watch.href = `/provider-watch?${watchParams}`; watch.textContent = 'Гледай';
+        actions.append(watch);
         const sourceButton = document.createElement('button'); sourceButton.className = 'episode-source-button'; sourceButton.type = 'button'; sourceButton.textContent = 'Източници';
         const sourceInfo = document.createElement('span'); sourceInfo.className = 'source-info';
         showSource(episode.id, sourceButton, sourceInfo);

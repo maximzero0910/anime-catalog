@@ -44,6 +44,44 @@ test('Worker proxy preserves trusted provider HLS manifest rewriting', async () 
   } finally { globalThis.fetch = original; }
 });
 
+test('Worker manifest streaming enforces the cap before buffering chunked bodies', async () => {
+  const original = globalThis.fetch;
+  let sent = 0;
+  let cancelled = false;
+  globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent >= 2 * 1_048_576) { controller.close(); return; }
+      sent += 64 * 1024;
+      controller.enqueue(new Uint8Array(64 * 1024).fill(65));
+    },
+    cancel() { cancelled = true; },
+  }), { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } })) as typeof fetch;
+  try {
+    const response = await worker.fetch(request(`/api/hls?u=${encodeURIComponent('https://media.example.test/master.m3u8')}`), env as never);
+    assert.equal(response.status, 413);
+    // ReadableStream may prefill its one-chunk queue while the consumer detects the cap.
+    assert.ok(sent <= 1_048_576 + 2 * 64 * 1024);
+    assert.equal(cancelled, true);
+  } finally { globalThis.fetch = original; }
+});
+
+test('legacy /s does not turn failed or malformed manifests into successful playlists', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () => new Response('upstream unavailable', { status: 503, headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } })) as typeof fetch;
+  try {
+    const failed = await worker.fetch(request(`/s?u=${encodeURIComponent('https://media.example.test/master.m3u8')}`), env as never);
+    assert.equal(failed.status, 503);
+    assert.equal(await failed.text(), '');
+  } finally { globalThis.fetch = original; }
+
+  globalThis.fetch = (async () => new Response('<html>blocked</html>', { status: 200, headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } })) as typeof fetch;
+  try {
+    const malformed = await worker.fetch(request(`/s?u=${encodeURIComponent('https://media.example.test/master.m3u8')}`), env as never);
+    assert.equal(malformed.status, 502);
+    assert.match(await malformed.text(), /invalid HLS manifest/);
+  } finally { globalThis.fetch = original; }
+});
+
 test('legacy /s segment route preserves Range and streams bytes for the trusted segment zone', async () => {
   const original = globalThis.fetch; let observedRange = '';
   globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -61,4 +99,54 @@ test('legacy /s segment route preserves Range and streams bytes for the trusted 
 test('Worker proxy rejects empty host policy closed', async () => {
   const response = await worker.fetch(request(`/s?u=${encodeURIComponent('https://media.example.test/seg.ts')}`), { RESOLVER: env.RESOLVER } as never);
   assert.equal(response.status, 503);
+});
+
+test('resolver calls stop at the configured deadline', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalTimeout = AbortSignal.timeout;
+  globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+  })) as typeof fetch;
+  Object.defineProperty(AbortSignal, 'timeout', { configurable: true, value: (_milliseconds: number) => originalTimeout(5) });
+  try {
+    const response = await worker.fetch(request('/api/anime/anikoto/search?q=example'), env as never);
+    assert.equal(response.status, 504);
+  } finally {
+    globalThis.fetch = originalFetch;
+    Object.defineProperty(AbortSignal, 'timeout', { configurable: true, value: originalTimeout });
+  }
+});
+
+test('resolver response content length is capped before buffering', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () => new Response('', { headers: { 'Content-Length': String(4 * 1_048_576 + 1) } })) as typeof fetch;
+  try {
+    const response = await worker.fetch(request('/api/anime/anikoto/search?q=example'), env as never);
+    assert.equal(response.status, 502);
+    assert.match(await response.text(), /upstreamStatus/);
+  } finally { globalThis.fetch = original; }
+});
+
+test('malformed resolver source JSON becomes a safe playback error', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () => new Response('{not json', { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+  try {
+    const response = await worker.fetch(request('/p/anikoto/episode-1'), env as never);
+    assert.equal(response.status, 502);
+    assert.match(await response.text(), /malformed JSON/);
+  } finally { globalThis.fetch = original; }
+});
+
+test('client cancellation is propagated to resolver requests', async () => {
+  const original = globalThis.fetch;
+  const controller = new AbortController();
+  globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    setTimeout(() => controller.abort(), 1);
+  })) as typeof fetch;
+  try {
+    const cancelledRequest = new Request('https://worker.example.test/api/anime/anikoto/search?q=example', { signal: controller.signal });
+    const response = await worker.fetch(cancelledRequest, env as never);
+    assert.equal(response.status, 499);
+  } finally { globalThis.fetch = original; }
 });

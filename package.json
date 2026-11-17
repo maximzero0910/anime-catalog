@@ -10,6 +10,7 @@
     "ingest": "node --import tsx tools/ingest.ts",
     "build:index": "node --import tsx tools/build-index.ts",
     "provider:sync": "node --import tsx tools/sync-provider-map.ts",
+    "catalog:backup": "node --import tsx tools/catalog-backup.ts",
     "test:e2e": "node --import tsx --test tools/e2e.test.ts",
     "test:proxy": "node --import tsx --test src/lib/tests/hls-proxy.test.ts worker/tests/proxy.test.ts",
     "test:admin": "node --import tsx --test src/lib/tests/admin-auth.test.ts",
@@ -43,7 +44,7 @@
     "pagefind": "^1.3.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
-    "wrangler": "^3.99.0"
+    "wrangler": "^4.164.0"
   },
   "allowScripts": {
     "better-sqlite3@13.2.0": true

@@ -1,12 +1,51 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateDestination, fetchPublic, ProxyError, proxyLimits } from '../hls-proxy';
+import { fetchPublic, issueManifestProxyToken, proxySubtitleTracks, ProxyError, proxyLimits, resolveManifestProxyToken, validateDestination } from '../hls-proxy';
 
 const hosts = ['media.example.test', '*.segments.example.test'];
 const resolver = async (_host: string, _options: { all: true; verbatim: true }) => [{ address: '93.184.216.34', family: 4 }];
 
 test('accepts HTTPS on an exact allowlisted media host after public DNS validation', async () => {
   assert.deepEqual(await validateDestination(new URL('https://media.example.test/master.m3u8'), hosts, resolver), ['93.184.216.34']);
+});
+
+test('accepts globally routable IPv6 DNS answers', async () => {
+  const ipv6Resolver = async () => [{ address: '2606:4700:3034::6815:4fd2', family: 6 }];
+  assert.deepEqual(await validateDestination(new URL('https://media.example.test/master.m3u8'), hosts, ipv6Resolver), ['2606:4700:3034::6815:4fd2']);
+});
+
+test('manifest-issued tokens authorize rotating public segment hosts without a wildcard', async () => {
+  const token = issueManifestProxyToken('https://rotating-cdn.example.test/segment.ts?sig=abc', 'https://player.example.test/');
+  assert.deepEqual(resolveManifestProxyToken(token), { url: 'https://rotating-cdn.example.test/segment.ts?sig=abc', referer: 'https://player.example.test/' });
+  assert.equal(resolveManifestProxyToken('unissued-token'), undefined);
+  const response = await fetchPublic(new URL('https://rotating-cdn.example.test/segment.ts'), {}, [], new AbortController().signal, {
+    manifestAuthorizedTarget: true, resolve: resolver, fetcher: async () => new Response(new Uint8Array([1, 2, 3])),
+  });
+  assert.equal(response.status, 200);
+  await assert.rejects(() => fetchPublic(new URL('https://rotating-cdn.example.test/segment.ts'), {}, [], new AbortController().signal, {
+    manifestAuthorizedTarget: true,
+    resolve: async () => [{ address: '10.0.0.1', family: 4 }],
+    fetcher: async () => new Response(new Uint8Array([1])),
+  }), /non-public-destination/);
+});
+
+test('manifest token issuance rejects unsafe protocols and referers', () => {
+  assert.throws(() => issueManifestProxyToken('http://rotating-cdn.example.test/segment.ts', ''), /invalid-manifest-target/);
+  assert.throws(() => issueManifestProxyToken('https://rotating-cdn.example.test/segment.ts', 'http://player.example.test/'), /invalid-referer/);
+});
+
+test('provider subtitles are issued as same-origin proxy capabilities with their provider referer', () => {
+  const tracks = proxySubtitleTracks([
+    { lang: 'English', format: 'vtt', url: 'https://captions.example.test/tougen-anki-01.vtt?token=abc' },
+    { lang: 'Broken', format: 'vtt', url: 'http://captions.example.test/bad.vtt' },
+  ], 'https://embed.example.test/');
+  assert.equal(tracks.length, 1);
+  assert.match(tracks[0]!.url, /^\/api\/hls\?t=/);
+  const token = new URL(tracks[0]!.url, 'https://anineko.test').searchParams.get('t')!;
+  assert.deepEqual(resolveManifestProxyToken(token), {
+    url: 'https://captions.example.test/tougen-anki-01.vtt?token=abc',
+    referer: 'https://embed.example.test/',
+  });
 });
 
 test('scoped rotating segment zone accepts subdomains but not unrelated suffixes or apex', async () => {
@@ -19,6 +58,24 @@ test('rejects HTTP, credentials, localhost, private IPv4 and alternate IPv4 nota
   for (const value of ['http://media.example.test/a.m3u8', 'https://u:p@media.example.test/a.m3u8', 'https://127.0.0.1/a', 'https://2130706433/a', 'https://10.1.2.3/a']) {
     await assert.rejects(() => validateDestination(new URL(value), ['media.example.test'], resolver));
   }
+});
+
+test('legacy HTTP is allowed only for an explicitly named provider host and still pins public DNS', async () => {
+  assert.deepEqual(await validateDestination(new URL('http://subs.sab.bz/file.zip'), ['subs.sab.bz'], resolver, false, ['subs.sab.bz']), ['93.184.216.34']);
+  await assert.rejects(() => validateDestination(new URL('http://evil.test/file.zip'), ['evil.test'], resolver, false, ['subs.sab.bz']), /https-required/);
+  await assert.rejects(() => validateDestination(new URL('http://subs.sab.bz/file.zip'), ['subs.sab.bz'], async () => [{ address: '192.168.1.10', family: 4 }], false, ['subs.sab.bz']), /non-public-destination/);
+});
+
+test('legacy HTTP redirects remain constrained by exact host policy', async () => {
+  let calls = 0;
+  const fetcher = async () => {
+    calls++;
+    return new Response(null, { status: 302, headers: { location: 'http://127.0.0.1/private' } });
+  };
+  await assert.rejects(() => fetchPublic(new URL('http://subs.sab.bz/file.zip'), {}, ['subs.sab.bz'], new AbortController().signal, {
+    allowHttpHosts: ['subs.sab.bz'], resolve: resolver, fetcher,
+  }), /https-required|host-not-allowed|non-public-destination/);
+  assert.equal(calls, 1);
 });
 
 test('rejects loopback, link-local, mapped private and unique-local IPv6 literals', async () => {
@@ -104,4 +161,30 @@ test('rejects immediately when active and bounded waiting capacity are full', as
   await new Promise(resolve => setTimeout(resolve, 10));
   await assert.rejects(() => fetchPublic(new URL('https://media.example.test/b'), {}, hosts, new AbortController().signal, runtime), /proxy-overloaded/);
   release(); await first;
+});
+
+test('waiters honor the configured active cap and cancellation removes them from the queue', async () => {
+  let releaseFirst!: () => void;
+  const firstHold = new Promise<void>(resolve => { releaseFirst = resolve; });
+  let secondStarted = false;
+  const runtime = { resolve: resolver, maxActive: 1, maxWaiting: 2, fetcher: async (_url: URL) => {
+    if (!secondStarted) { await firstHold; return new Response('first'); }
+    return new Response('second');
+  } };
+  const first = fetchPublic(new URL('https://media.example.test/first.ts'), {}, hosts, new AbortController().signal, runtime);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  const cancelled = new AbortController();
+  const queued = fetchPublic(new URL('https://media.example.test/queued.ts'), {}, hosts, cancelled.signal, runtime);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(proxyLimits().active, 1);
+  assert.equal(proxyLimits().waiting, 1);
+  cancelled.abort();
+  await assert.rejects(() => queued, /client-cancelled/);
+  assert.equal(proxyLimits().waiting, 0);
+  releaseFirst();
+  await first;
+
+  secondStarted = true;
+  const next = await fetchPublic(new URL('https://media.example.test/next.ts'), {}, hosts, new AbortController().signal, runtime);
+  assert.equal(next.status, 200);
 });

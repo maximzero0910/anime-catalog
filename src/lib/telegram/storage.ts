@@ -1,10 +1,12 @@
 import './config';
 import Database from 'better-sqlite3';
-import { resolve } from 'node:path';
+import { catalogDatabasePath } from '../catalog-path';
+import { createSqliteLease } from '../sqlite-lease';
 
-const database = new Database(resolve(process.env.CATALOG_DB_PATH ?? 'data/catalog.db'), { timeout: 5000 });
+const database = new Database(catalogDatabasePath(), { timeout: 5000 });
 database.pragma('journal_mode = WAL');
 database.pragma('busy_timeout = 5000');
+const telegramSyncLease = createSqliteLease(database, 'telegram-sync');
 database.exec(`
 CREATE TABLE IF NOT EXISTS telegram_sync_state (
   id INTEGER PRIMARY KEY CHECK(id=1), channel TEXT NOT NULL DEFAULT '', channel_id TEXT NOT NULL DEFAULT '', channel_name TEXT NOT NULL DEFAULT '',
@@ -71,6 +73,9 @@ export function getPlayableTelegramMessage(messageId: number): (TelegramMessageR
 export function matchedTelegramEpisodes(animeId?: number): Array<Record<string, unknown>> {
   return (animeId === undefined ? database.prepare(`SELECT m.*,x.* FROM telegram_episode_matches x JOIN telegram_messages m USING(channel_id,message_id) ORDER BY x.updated_at DESC`).all() : database.prepare(`SELECT m.*,x.* FROM telegram_episode_matches x JOIN telegram_messages m USING(channel_id,message_id) WHERE x.anime_id=? ORDER BY x.episode_number`).all(animeId)) as Array<Record<string, unknown>>;
 }
+export function playableTelegramAnimeIds(): number[] {
+  return (database.prepare(`SELECT DISTINCT anime_id FROM telegram_episode_matches WHERE status='MATCHED' AND verified=1 AND primary_match=1 AND anime_id IS NOT NULL AND episode_number>0`).all() as Array<{ anime_id: number }>).map(row => Number(row.anime_id));
+}
 export function telegramAdminMessages(): Array<Record<string, unknown>> {
   return database.prepare(`SELECT m.channel_id,m.message_id,m.caption,m.filename,m.duration_seconds,m.file_size,
     x.anime_id,x.episode_number,x.season_number,x.confidence,x.status,x.reason,x.candidates,x.verified,x.primary_match,
@@ -96,6 +101,10 @@ export function recordTelegramMediaFailure(messageId: number, error: string): vo
 }
 export function clearTelegramMediaFailure(messageId: number): void { database.prepare('DELETE FROM telegram_media_failures WHERE message_id=?').run(messageId); }
 export function telegramSyncCheckpoint(): number { return Number((database.prepare('SELECT checkpoint FROM telegram_sync_state WHERE id=1').get() as { checkpoint: number }).checkpoint); }
+export function acquireTelegramSyncLease(owner: string, now = Date.now(), ttlMs = 120_000): boolean { return telegramSyncLease.acquire(owner, now, ttlMs); }
+export function renewTelegramSyncLease(owner: string, now = Date.now(), ttlMs = 120_000): boolean { return telegramSyncLease.renew(owner, now, ttlMs); }
+export function telegramSyncLeaseActive(now = Date.now()): boolean { return telegramSyncLease.isActive(now); }
+export function releaseTelegramSyncLease(owner: string): boolean { return telegramSyncLease.release(owner); }
 export function updateTelegramSyncState(values: { channel?: string; channelId?: string; channelName?: string; checkpoint?: number; status?: string; progress?: number; lastSuccess?: string | null; lastError?: string | null }): void {
   const current = database.prepare('SELECT * FROM telegram_sync_state WHERE id=1').get() as Record<string, unknown>;
   database.prepare(`UPDATE telegram_sync_state SET channel=@channel,channel_id=@channel_id,channel_name=@channel_name,checkpoint=@checkpoint,status=@status,progress=@progress,last_success=@last_success,last_error=@last_error,updated_at=@updated_at WHERE id=1`).run({

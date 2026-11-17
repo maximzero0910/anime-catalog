@@ -1,8 +1,9 @@
 import Database from 'better-sqlite3';
-import { resolve } from 'node:path';
 import './telegram/storage';
+import { catalogDatabasePath } from './catalog-path';
 
-const db = new Database(resolve(process.cwd(), 'data/catalog.db'), { readonly: true, fileMustExist: true });
+const db = new Database(catalogDatabasePath(), { readonly: true, fileMustExist: true, timeout: 5000 });
+db.pragma('busy_timeout = 5000');
 export interface Title {
   id: number; slug: string; romaji: string | null; english: string | null; native: string | null;
   title_bg: string | null; synopsis_bg: string | null; year: number | null; format: string | null;
@@ -26,6 +27,10 @@ export function getTitleById(id: number): Title | undefined {
 }
 export function getEpisodes(titleId: number): Episode[] { return db.prepare('SELECT * FROM episodes WHERE title_id = ? ORDER BY number').all(titleId) as Episode[]; }
 export function getSubtitle(titleId: number, number: number): Subtitle | undefined { return db.prepare('SELECT * FROM subs WHERE title_id = ? AND number = ?').get(titleId, number) as Subtitle | undefined; }
+export function assertCatalogDatabaseReady(): void {
+  db.prepare('SELECT 1').get();
+  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='titles'").get()) throw new Error('catalog schema unavailable');
+}
 export interface BulgarianCoverage { available: number; total: number; complete: boolean; }
 const existingTables = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(row => row.name));
 const tableExists = (name: string) => existingTables.has(name);

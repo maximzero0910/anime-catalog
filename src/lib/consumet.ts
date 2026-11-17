@@ -1,11 +1,12 @@
 import type { CatalogFilters } from './catalog-filters';
 
 export interface ConsumetSearchResult {
-  id: string;
+  id: string; alt?: string[];
   title: string | { english?: string; romaji?: string; native?: string };
   image?: string; cover?: string; releaseDate?: string; type?: string; genres?: string[];
   tags?: string[]; year?: number; releaseTimestamp?: number; season?: string; status?: string; rating?: number;
-  popularity?: number; animeType?: string; format?: string; anilistId?: number;
+  popularity?: number; animeType?: string; format?: string; anilistId?: number; providerId?: string;
+  providerChoices?: Array<{ providerId: string; id: string }>;
 }
 export interface ConsumetEpisode { id: string; number: number; title?: string; url?: string; }
 export interface ConsumetSource { url: string; isM3U8?: boolean; quality?: string; type?: string; }
@@ -33,23 +34,21 @@ async function request<T>(path: string, options: { signal?: AbortSignal; direct?
 }
 
 export const searchProvider = (provider: string, query: string, signal?: AbortSignal) =>
-  provider === 'anikoto'
-    ? request<{ results?: ConsumetSearchResult[] }>(`/provider-catalog?${new URLSearchParams({ provider, action: 'search', q: query })}`, { signal, direct: true })
-    : request<{ results?: ConsumetSearchResult[] }>(`/anime/${encodeURIComponent(provider)}/${encodeURIComponent(query)}`, { signal });
+  request<{ results?: ConsumetSearchResult[] }>(`/provider-catalog?${new URLSearchParams({ provider, action: 'search', q: query })}`, { signal, direct: true });
+
+export const searchAllProviders = (query: string, signal?: AbortSignal) =>
+  request<{ results?: ConsumetSearchResult[]; providers?: Array<{ providerId: string; count: number; error?: string }> }>(
+    `/provider-catalog?${new URLSearchParams({ provider: 'all', action: 'search', q: query })}`, { signal, direct: true },
+  );
 export const getProviderAnime = (provider: string, id: string) =>
-  provider === 'anikoto'
-    ? request<ConsumetAnimeInfo>(`/provider-catalog?${new URLSearchParams({ provider, action: 'info', id })}`, { direct: true })
-    : request<ConsumetAnimeInfo>(`/anime/${encodeURIComponent(provider)}/info?id=${encodeURIComponent(id)}`);
+  request<ConsumetAnimeInfo>(`/provider-catalog?${new URLSearchParams({ provider, action: 'info', id })}`, { direct: true });
 export async function getEpisodeStreams(provider: string, episodeId: string) {
-  if (provider === 'anikoto') {
-    const query = new URLSearchParams({ provider, episodeId, audio: 'sub' });
-    const source = await request<{ url: string; type: string; quality: string; subtitles?: Array<{ url: string; lang?: string }> }>(`/provider-stream?${query}`, { direct: true });
-    return {
-      sources: [{ url: source.url, isM3U8: source.type === 'hls', quality: source.quality, type: source.type }],
-      subtitles: source.subtitles ?? [],
-    };
-  }
-  return request<{ sources?: ConsumetSource[]; subtitles?: Array<{ url: string; lang?: string }> }>(`/anime/${encodeURIComponent(provider)}/watch/${encodeURIComponent(episodeId)}`);
+  const query = new URLSearchParams({ provider, episodeId, audio: 'sub' });
+  const source = await request<{ url: string; type: string; quality: string; subtitles?: Array<{ url: string; lang?: string }> }>(`/provider-stream?${query}`, { direct: true });
+  return {
+    sources: [{ url: source.url, isM3U8: source.type === 'hls', quality: source.quality, type: source.type }],
+    subtitles: source.subtitles ?? [],
+  };
 }
 
 export async function filterProviderResults(

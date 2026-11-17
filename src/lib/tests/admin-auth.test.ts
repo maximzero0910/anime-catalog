@@ -98,6 +98,15 @@ for (const routeCase of [
       assert.equal(read.status, 200);
       const payload = await read.json() as Record<string, unknown>;
       assert.ok(typeof payload === 'object' && payload !== null);
+      if (routeCase.name === 'subtitles admin') {
+        const resources = (payload as { resources?: { storage?: { totalBytes?: number; availableBytes?: number; usedPercent?: number } | null } }).resources;
+        assert.ok(resources?.storage === null || (Number.isFinite(resources?.storage?.totalBytes) && Number.isFinite(resources?.storage?.availableBytes) && Number.isFinite(resources?.storage?.usedPercent)));
+      }
+      if (routeCase.name === 'telegram admin') {
+        const pool = (payload as { mediaPool?: { size?: number; active?: number; waiting?: number; closed?: boolean } }).mediaPool;
+        assert.ok(pool && Number.isSafeInteger(pool.size) && Number.isSafeInteger(pool.active) && Number.isSafeInteger(pool.waiting));
+        assert.ok(pool.active! >= 0 && pool.active! <= pool.size! && pool.waiting! >= 0);
+      }
       const dispatched = await route.POST({ request: post(routeCase.url, { ...authorizedHeaders, 'content-type': 'application/json' }, '{"action":"definitely-not-a-real-action"}') });
       assert.equal(dispatched.status, 400);
       assert.equal((await dispatched.json() as { error: string }).error, 'unknown-action');
@@ -114,3 +123,18 @@ for (const routeCase of [
     }
   });
 }
+
+test('public debug resolver requires the configured admin bearer token before provider work', async () => {
+  const route = await import('../../pages/api/debug/resolve');
+  const url = 'http://127.0.0.1:4321/api/debug/resolve?animeId=1&episode=1';
+  await withRouteEnv('SUBTITLE_ADMIN_TOKEN', VALID_TOKEN, async () => {
+    const response = await route.GET({ request: new Request(url) });
+    assert.equal(response.status, 401);
+    assert.deepEqual(await response.json(), { error: 'unauthorized' });
+  });
+  await withRouteEnv('SUBTITLE_ADMIN_TOKEN', undefined, async () => {
+    const response = await route.GET({ request: new Request(url, { headers: { authorization: `Bearer ${VALID_TOKEN}` } }) });
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { error: 'debug endpoint disabled' });
+  });
+});
