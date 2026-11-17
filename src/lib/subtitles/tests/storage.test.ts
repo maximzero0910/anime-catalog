@@ -171,6 +171,17 @@ test('pause, resume and graceful stop flags persist across process connections',
   stoppedRestart.close();
 });
 
+test('system shutdown restores only its own transient stop flag and preserves operator controls', () => {
+  storage.setWorkerControl('stopping');
+  assert.equal(storage.compareAndSetWorkerControl('stopping', 'running'), true);
+  assert.equal(storage.workerControl(), 'running');
+  storage.setWorkerControl('stopping');
+  storage.setWorkerControl('paused');
+  assert.equal(storage.compareAndSetWorkerControl('stopping', 'running'), false);
+  assert.equal(storage.workerControl(), 'paused');
+  storage.setWorkerControl('running');
+});
+
 test('worker dashboard status follows a live heartbeat and expires after a crash', () => {
   storage.recordWorkerHeartbeat(10_000);
   assert.equal(storage.workerProcessStatus(20_000, 30_000), 'running');

@@ -450,6 +450,9 @@ export function recoverStaleJobs(staleMs: number, now = Date.now()): number {
 export type WorkerControl = 'running' | 'paused' | 'stopping';
 export function workerControl(): WorkerControl { const row = database.prepare(`SELECT value FROM subtitle_worker_settings WHERE key='control'`).get() as { value: string } | undefined; return (row?.value as WorkerControl) ?? 'running'; }
 export function setWorkerControl(value: WorkerControl): void { database.prepare(`INSERT INTO subtitle_worker_settings(key,value,updated_at) VALUES('control',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).run(value, nowIso()); }
+export function compareAndSetWorkerControl(expected: WorkerControl, next: WorkerControl): boolean {
+  return database.prepare(`UPDATE subtitle_worker_settings SET value=?,updated_at=? WHERE key='control' AND value=?`).run(next, nowIso(), expected).changes === 1;
+}
 export function recordWorkerHeartbeat(at = Date.now()): void { database.prepare(`INSERT INTO subtitle_worker_settings(key,value,updated_at) VALUES('worker-heartbeat',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).run(String(at), nowIso()); }
 export function workerProcessStatus(now = Date.now(), staleAfterMs = 30_000): 'running' | 'stopped' {
   const row = database.prepare(`SELECT value FROM subtitle_worker_settings WHERE key='worker-heartbeat'`).get() as { value: string } | undefined;

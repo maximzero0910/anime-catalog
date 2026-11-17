@@ -1,7 +1,7 @@
 import { discoverTracks, downloadTrack, resolveSubtitleSource, type SubtitleTrack } from '../src/lib/subtitles/acquire';
 import { subtitleConfig } from '../src/lib/subtitles/config';
 import { parseSubtitle } from '../src/lib/subtitles/normalize';
-import { addDeadLetter, claimJobs, claimUndiscoveredJobs, existingBulgarian, getJob, heartbeatJob, logJob, pruneSubtitleOperationalData, readBody, recordWorkerHeartbeat, recoverStaleJobs, saveBody, saveSubtitleHardsub, setWorkerControl, skipJobForNoSubtitleSource, storeValidatedArtifact, updateJob, workerConcurrency, workerControl, type Job } from '../src/lib/subtitles/storage';
+import { addDeadLetter, claimJobs, claimUndiscoveredJobs, compareAndSetWorkerControl, existingBulgarian, getJob, heartbeatJob, logJob, pruneSubtitleOperationalData, readBody, recordWorkerHeartbeat, recoverStaleJobs, saveBody, saveSubtitleHardsub, setWorkerControl, skipJobForNoSubtitleSource, storeValidatedArtifact, updateJob, workerConcurrency, workerControl, type Job, type WorkerControl } from '../src/lib/subtitles/storage';
 import { enqueueEligible } from '../src/lib/subtitles/queue';
 import { SubtitleWorkerPause, SubtitleWorkerStop, translateSubtitleJob } from '../src/lib/subtitles/translate';
 import { nextProviderAvailableAt } from '../src/lib/subtitles/providers';
@@ -17,7 +17,18 @@ let stopping = false;
 recordWorkerHeartbeat();
 const workerHeartbeat = setInterval(() => recordWorkerHeartbeat(), 10_000);
 workerHeartbeat.unref();
-const setStop = () => { stopping = true; setWorkerControl('stopping'); console.log('Graceful shutdown requested; current batch will checkpoint before exit.'); };
+let controlAtShutdown: WorkerControl | undefined;
+const setStop = () => {
+  if (stopping) return;
+  stopping = true;
+  try {
+    controlAtShutdown = workerControl();
+    if (controlAtShutdown === 'running') setWorkerControl('stopping');
+  } catch (error) {
+    console.error({ event: 'subtitle_worker_shutdown_control_failed', reason: error instanceof Error ? error.name : 'unknown' });
+  }
+  console.log('Graceful shutdown requested; current batch will checkpoint before exit.');
+};
 process.on('SIGINT', setStop);
 process.on('SIGTERM', setStop);
 
@@ -192,10 +203,11 @@ async function main(): Promise<void> {
   if (recovered) console.log(`Recovered ${recovered} stale jobs.`);
   if (workerControl() === 'paused') console.log('Worker is paused; resume it from /admin/subtitles or the admin API.');
   console.log(`Online subtitle worker active: maxConcurrency=${workerConcurrency()}, providers=${subtitleConfig.providerOrder.join(',')}, queueCap=${cap}`);
-  while (!stopping && workerControl() !== 'stopping') {
+  while (!stopping) {
     const newlyRecovered = recoverStaleJobs(subtitleConfig.staleLockMs);
     if (newlyRecovered) console.warn(`Recovered ${newlyRecovered} stale subtitle job(s).`);
-    if (workerControl() === 'paused') { await new Promise(resolve => setTimeout(resolve, 2000)); continue; }
+    const control = workerControl();
+    if (control === 'paused' || control === 'stopping') { await new Promise(resolve => setTimeout(resolve, 2000)); continue; }
     const undiscovered = claimUndiscoveredJobs(workerConcurrency());
     if (undiscovered.length) { await Promise.all(undiscovered.map(discoverQueuedJob)); continue; }
     const jobs = claimJobs(workerConcurrency());
@@ -209,4 +221,11 @@ async function main(): Promise<void> {
   console.log('Worker stopped cleanly.');
 }
 
-main().catch(error => { console.error(error instanceof Error ? error.stack : error); process.exitCode = 1; }).finally(() => { stopApplicationHeartbeat(); clearInterval(workerHeartbeat); });
+main().catch(error => { console.error(error instanceof Error ? error.stack : error); process.exitCode = 1; }).finally(() => {
+  clearInterval(workerHeartbeat);
+  if (controlAtShutdown === 'running') {
+    try { compareAndSetWorkerControl('stopping', 'running'); }
+    catch (error) { console.error({ event: 'subtitle_worker_shutdown_control_restore_failed', reason: error instanceof Error ? error.name : 'unknown' }); }
+  }
+  stopApplicationHeartbeat();
+});
