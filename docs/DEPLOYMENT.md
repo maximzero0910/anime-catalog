@@ -2,15 +2,15 @@
 
 ## Current release (2026-11-17)
 
-The frontend and backend run the same verified application commit, `9ddf295a6bf6efe44431aeb05cb10ac1099cd501`, from branch `production-hardening`. That commit is pushed to `origin/production-hardening`.
+The frontend and backend run application commit `65e975270e159d3389c5b3f8b21e19af529c1c14` from branch `production-hardening`; it is pushed to `origin/production-hardening`. The application commit is shared by both tiers. Subsequent documentation-only commits do not change the deployed application.
 
-- Frontend: Cloudflare Pages project `anime-catalog`, production branch `master`, domain `anineko.eu`.
-- Pages deployment: `9274052f-88c9-4cfe-b59a-64a150a430c4`, status `success`, commit metadata `9ddf295a6bf6efe44431aeb05cb10ac1099cd501`. Deployment URL: `https://9274052f.anime-catalog-e84.pages.dev`; production alias: `https://anineko.eu`.
-- Previous successful Pages deployment retained for rollback: `3e752f7b-e3cb-422f-8f75-2e6f4b697c3b`.
+- Frontend: Cloudflare Pages project `anime-catalog`, domain `anineko.eu`. The project uses manual deployments (Git provider: none); deployment metadata records branch `master`, but no production branch is configured on the project.
+- Pages deployment: `76585599-199c-468a-a082-551c94566a34`, status `success`, environment `production`, commit metadata `65e975270e159d3389c5b3f8b21e19af529c1c14`, `commit_dirty=false`, `uses_functions=true`. Deployment URL: `https://76585599.anime-catalog-e84.pages.dev`; production alias: `https://anineko.eu`.
+- Previous successful Pages deployment retained for rollback: `9274052f-88c9-4cfe-b59a-64a150a430c4` (commit `9ddf295a`). The Pages project has no Git provider configured, so there is no configured production branch; this was an explicit manual production deployment whose metadata records branch `master`.
 - Pages Function routes `/api/*` to the production secret `ANINEKO_API_ORIGIN`, set to `https://api.anineko.eu`. Cloudflare redacts the secret on readback; the deployed function was verified through live API and playback requests.
 - API DNS: proxied CNAME `api.anineko.eu` to tunnel `21a48fed-d0bb-42c0-b978-6e8b13cf72e9.cfargotunnel.com`.
 - Tunnel: existing tunnel `anineko-pi-origin`, healthy, ingress `api.anineko.eu` → `http://127.0.0.1:4321`; catch-all remains `http_status:404`. The existing `api-origin.anineko.eu` compatibility DNS and ingress were retained; its health path currently returns 200, so the reported 404 is no longer reproducible.
-- Pi: Debian 13 AArch64, Node `v22.23.5`, release at `/srv/anineko/releases/9ddf295a6bf6efe44431aeb05cb10ac1099cd501`.
+- Pi: Debian 13 AArch64, Node `v22.23.5`, release at `/srv/anineko/releases/65e975270e159d3389c5b3f8b21e19af529c1c14`.
 - Persistent database, subtitle files, Telegram session, and `.env` remain outside the release directory. Services run as the existing `max` account. No Pi application or SSH port is exposed directly.
 
 The earlier public 404 was consistent with the state recorded by the prior read-only audit: `api.anineko.eu` was absent from DNS and the Pages origin binding had no usable target; the deployed Pages response was an HTML 404 rather than the Function's JSON error. The current CNAME, Pages origin binding, Function routing, and backend path are verified below.
@@ -26,42 +26,43 @@ The following services are active and point to the release directory:
 | `anineko-subtitles-indexer.service` | Persistent subtitle source indexer; drains queued jobs only | 384 MiB Node heap, 50% CPU, 64 tasks |
 | `anineko-telegram-sync.service` | Telegram synchronization worker | 768 MiB Node heap, 100% CPU, 128 tasks |
 
-The services retain `Restart=on-failure`, with a five-start limit over ten minutes. Release-specific systemd drop-ins are in `/etc/systemd/system/<service>.service.d/50-release.conf`. The indexer is started with `--watch --queued-only`; a restart does not enqueue the full catalogue. Its catalog crawl remains an explicit operator action.
+All four services are active on the new release, retain `Restart=on-failure`, and have a five-start limit over ten minutes. Release-specific systemd drop-ins are in `/etc/systemd/system/<service>.service.d/50-release.conf`. The indexer is started with `--watch --queued-only`; it logged `queued=0` for catalog enumeration and did not enqueue the full catalogue. Provider reactivation did requeue existing durable miss jobs, which the service processes one at a time.
 
-`anineko-recovery.timer` is enabled. Its oneshot only resets/restarts the four allowlisted application units when systemd reports them failed; manual execution on the previous release returned exit status 0 and left active units untouched.
+`anineko-recovery.timer` is enabled. Its oneshot only resets/restarts the four allowlisted application units when systemd reports them failed. After this release, a manual run returned `Result=success`, `ExecMainStatus=0`, and left all active units running.
 
 The Pi exposes `cpuset`, `cpu`, `io`, and `pids` cgroup controllers, but not `memory`. Therefore `MemoryMax` is not enforced (`infinity` is reported). `NODE_OPTIONS` limits the JavaScript heap only; native allocations and SQLite mappings are not covered by that cap. Reassess memory limits if the kernel/cgroup configuration later enables the memory controller. Pre-deploy readings were 7.9 GiB RAM, 7.0 GiB available, 44 GiB disk free, and AArch64; the build ran on the Pi itself.
 
-The existing `.env` was preserved and copied with mode 0600 to `/srv/anineko/.deploy-backups/pre-9ddf295/units/anineko.env`. Do not print or commit this file. The SQLite database and subtitle assets remain at `/srv/anineko/data/catalog.db` and `/srv/anineko/data/subtitles`.
+The existing `.env` was preserved and copied with mode 0600 to `/srv/anineko/.deploy-backups/pre-65e9752/units/anineko.env`. Do not print or commit this file. The SQLite database and subtitle assets remain at `/srv/anineko/data/catalog.db` and `/srv/anineko/data/subtitles`.
 
 ## Backups and rollback
 
-Before activation, `tools/catalog-backup.ts` created and verified `/srv/anineko/.deploy-backups/pre-9ddf295/anineko-2026-11-17T17-06-11-520Z/`. It contains a 40,554,496-byte SQLite snapshot and all 138 subtitle assets. The backup and current database passed `PRAGMA integrity_check` (`ok`) and `PRAGMA foreign_key_check` (0 violations). The prior `33fe683` release remains available. The three previous systemd drop-ins and `.env` are backed up under `/srv/anineko/.deploy-backups/pre-9ddf295/units/`; the environment backup is mode 0600.
+Before activation, `tools/catalog-backup.ts` created and verified `/srv/anineko/.deploy-backups/pre-65e9752/catalog/anineko-2026-11-17T17-54-12-911Z/`. It contains a 40,554,496-byte SQLite snapshot and all 138 subtitle assets. The backup and live database passed `PRAGMA integrity_check` (`ok`) and `PRAGMA foreign_key_check` (0 violations). The prior `9ddf295a` release remains available. The three previous service drop-ins, recovery script, and `.env` are backed up under `/srv/anineko/.deploy-backups/pre-65e9752/units/`; the environment backup is mode 0600.
 
-To roll the Pi back to the previous `33fe683` release, restore the three saved drop-ins, reload systemd, and restart the services. This leaves the database, subtitle assets, Telegram session, `.env`, and release directories intact:
+To roll the Pi back to the previous `9ddf295a` release, stop and disable the newly added indexer, restore the three saved service drop-ins and prior recovery script, reload systemd, then restart the existing services. This leaves the database, subtitle assets, Telegram session, `.env`, and release directories intact:
 
 ```sh
-sudo install -m 0644 /srv/anineko/.deploy-backups/pre-9ddf295/units/anineko-web-50-release.conf /etc/systemd/system/anineko-web.service.d/50-release.conf
-sudo install -m 0644 /srv/anineko/.deploy-backups/pre-9ddf295/units/anineko-subtitles-worker-50-release.conf /etc/systemd/system/anineko-subtitles-worker.service.d/50-release.conf
-sudo install -m 0644 /srv/anineko/.deploy-backups/pre-9ddf295/units/anineko-telegram-sync-50-release.conf /etc/systemd/system/anineko-telegram-sync.service.d/50-release.conf
+sudo systemctl disable --now anineko-subtitles-indexer.service
+sudo install -m 0755 /srv/anineko/.deploy-backups/pre-65e9752/units/anineko-recover-failed /usr/local/libexec/anineko-recover-failed
+sudo install -m 0644 /srv/anineko/.deploy-backups/pre-65e9752/units/anineko-web-50-release.conf /etc/systemd/system/anineko-web.service.d/50-release.conf
+sudo install -m 0644 /srv/anineko/.deploy-backups/pre-65e9752/units/anineko-subtitles-worker-50-release.conf /etc/systemd/system/anineko-subtitles-worker.service.d/50-release.conf
+sudo install -m 0644 /srv/anineko/.deploy-backups/pre-65e9752/units/anineko-telegram-sync-50-release.conf /etc/systemd/system/anineko-telegram-sync.service.d/50-release.conf
 sudo systemctl daemon-reload
 sudo systemctl restart anineko-web.service anineko-subtitles-worker.service anineko-telegram-sync.service
 ```
 
-For frontend rollback, roll the Pages project back to `3e752f7b-e3cb-422f-8f75-2e6f4b697c3b` in Cloudflare. The Pages origin remains `https://api.anineko.eu`; both frontend releases use the same `/api/*` contract. Do not restore the database for a code rollback.
+For frontend rollback, roll the Pages project back to `9274052f-88c9-4cfe-b59a-64a150a430c4` in Cloudflare. The Pages origin remains configured as a secret; both frontend releases use the same `/api/*` contract. Do not restore the database for a code rollback.
 
 ## Verification recorded for this release
 
-- Clean worktree at the release SHA: `npx astro sync && npm run build` passed and generated the static catalog and Functions inputs. A bare `npm run build` in the empty worktree first failed because Astro middleware types had not been synchronized; the clean-build sequence then passed.
-- ARM64 Pi release: `npm ci`, `npx astro sync`, and `npm run build` completed successfully on the Pi. `systemd-analyze verify` passed before service activation.
-- Broad local test sweep: 178 passed, 0 failed. `npm run test:e2e` separately reported 4 failures because local resolver/Worker services at `127.0.0.1:3000` and `127.0.0.1:8787` were unavailable, plus 1 opt-in media test skipped. These E2E failures are not counted as passing; the production browser path was tested separately.
+- Clean Pages worktree at the release SHA: `npx astro sync && npm run build` passed. The ARM64 Pi release ran `npm ci`, `npx astro sync`, and `npm run build` successfully. `systemd-analyze verify` passed before activation.
+- `npx tsc --noEmit` passed. Broad test sweep: 178 passed, 0 failed. `npm run test:e2e` separately reported 4 failures because resolver/Worker services at `127.0.0.1:3000` and `127.0.0.1:8787` were unavailable, plus 1 opt-in media test skipped; these are not counted as passing.
 - Current `npm audit` and `npm audit --omit=dev` report 11 high-severity dependency paths from one `picomatch` advisory (affected through 4.0.7; GitHub currently lists no patched version). npm's suggested forced Astro downgrade is a major-version change and was not applied. `git diff --check` passed. The pre-existing worktree change `data/catalog.db` was not staged or deployed.
-- Pages deployment `9274052f-88c9-4cfe-b59a-64a150a430c4` completed and reports production, alias `anineko.eu`, commit `9ddf295a6bf6efe44431aeb05cb10ac1099cd501`, and `uses_functions=true`. Public `/api/*` health requests returned dynamic no-store JSON through the Pages Function.
+- Pages deployment `76585599-199c-468a-a082-551c94566a34` is active in production and records the release SHA with `commit_dirty=false`; `/api/*` is served by its Functions bundle. The production `ANINEKO_API_ORIGIN` variable is a Cloudflare `secret_text` and is redacted on readback; the live Pages-to-API requests verified forwarding.
 - Public DNS resolution and TLS verification succeeded. Direct API and Pages-proxied `/api/health/live` and `/api/health/ready` returned HTTP 200 JSON. Unauthenticated subtitle and Telegram admin endpoints returned HTTP 401 JSON.
-- `anineko.eu/`, `/anime/154587/`, and `/watch/154587/5/` returned HTTP 200 HTML. Chromium search entered `frieren` through the UI, made provider-catalog requests returning HTTP 200, and displayed three cards from Telegram and AniKoto. AllAnime returned upstream HTTP 500; the aggregate search still returned results with a partial-provider notice.
-- Pages-proxied `/api/stream/154587/5` returned HTTP 200 and selected Telegram MP4 with `hardsub: bg`. Chromium played the episode unmuted for 11.7 seconds (`readyState=4`, `paused=false`, 1280×720, no media error). `ffprobe` identified H.264 video and AAC audio. `/api/telegram/media/32` honored `Range: bytes=0-1023` with HTTP 206, 1,024 bytes, `video/mp4`, and `Accept-Ranges: bytes`.
-- `/api/subtitles/1/5` returned HTTP 200 `text/vtt`, 53,557 bytes, a `WEBVTT` header, 565 cue timestamps, language `bg`, and source `provider`.
-- Pi web, subtitle worker, Telegram sync, and recovery timer are active. Authenticated worker resume returned HTTP 200 and control state `running`; worker heartbeats were fresh. Starting the recovery oneshot returned `Result=success`, `ExecMainStatus=0`. The live database remained integrity `ok` with zero foreign-key violations after restart.
+- `anineko.eu/`, `/anime/154587/`, and `/watch/154587/5/` returned HTTP 200 HTML. Aggregate search `Frieren` returned HTTP 200 with five rows from Telegram and AniKoto; unauthenticated admin routes returned HTTP 401 JSON.
+- Pages-proxied `/api/stream/154587/5` returned HTTP 200 and selected Telegram MP4 with Bulgarian hardsubs. Chromium clicked play and advanced unmuted for 11.9 seconds (`readyState=4`, `paused=false`, 1280×720, no media error). `/api/telegram/media/32` returned HTTP 206 with 1,024 nonzero bytes for `Range: bytes=0-1023` through both `api.anineko.eu` and `anineko.eu`. One earlier Pages range probe timed out before bytes; direct and proxied retries then succeeded.
+- `/api/subtitles/1/5` returned HTTP 200 `text/vtt`, 53,557 bytes, a `WEBVTT` header, and 565 cue timestamps.
+- Web, translation worker, indexer, Telegram sync, and named Tunnel services are active with zero restarts. Translation worker control is `running` with a fresh heartbeat; no translation jobs were in flight at verification (19 completed, 103 failed, 28 skipped). The indexer reports `mode=queued-only` and is reducing persisted provider-miss work one job at a time: at the final status capture there were 669 jobs total (278 completed, 390 queued, 1 running, 0 failed). Provider reactivation explains the queued backlog; the indexer did not enqueue the full catalogue. The recovery oneshot returned `Result=success`, `ExecMainStatus=0`. The live database remained integrity `ok` with zero foreign-key violations.
 
 ## Deployment procedure
 
