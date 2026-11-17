@@ -10,7 +10,9 @@ The Pi supports CPU and task cgroup controls but its cgroup v2 controller list o
 
 ## Failed-service recovery timer
 
-`anineko-recover-failed` only checks these fixed names: `anineko-web.service`, `anineko-subtitles-worker.service`, and `anineko-telegram-sync.service`. It resets and starts a unit only after systemd reports that allowlisted unit in `failed` state. Never pass user-controlled unit names to the script. The timer runs at boot after five minutes and at most every ten minutes thereafter, so it provides a bounded recovery attempt after a normal systemd restart burst is exhausted.
+`anineko-recover-failed` only checks these fixed names: `anineko-web.service`, `anineko-subtitles-worker.service`, `anineko-subtitles-indexer.service`, and `anineko-telegram-sync.service`. It resets and starts a unit only after systemd reports that allowlisted unit in `failed` state. Never pass user-controlled unit names to the script. The timer runs at boot after five minutes and at most every ten minutes thereafter, so it provides a bounded recovery attempt after a normal systemd restart burst is exhausted.
+
+The Pi's `anineko-subtitles-indexer.service` uses the immutable release directory and `--watch --queued-only`. This keeps the persistent indexer from enqueueing a full-catalog crawl on every restart; catalog-wide discovery remains an explicit operator command. The indexer processes one durable queued job at a time and is included in the recovery allowlist.
 
 After reviewing the paths and running `systemd-analyze verify`, install the small recovery mechanism independently of the full service templates:
 

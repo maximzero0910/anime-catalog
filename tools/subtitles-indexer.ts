@@ -5,10 +5,12 @@ import { claimSubtitleIndexJobs, enqueueSubtitleIndexJob, finishSubtitleIndexJob
 import { startWorkerHeartbeat } from '../src/lib/worker-heartbeat';
 import { indexProviderCandidates } from '../src/lib/subtitles/index-runner';
 import { subtitleConfig } from '../src/lib/subtitles/config';
+import { subtitleIndexerMode } from '../src/lib/subtitles/indexer-mode';
 
-// DECISION: crawl the small title catalog first and process one durable job at a time; provider concurrency caps are enforced per host.
+// DECISION: explicit catalog runs enqueue all episodes; the persistent service uses --queued-only to avoid startup fan-out.
 const watch = process.argv.includes('--watch');
 const seed = process.argv.includes('--seed');
+const indexerMode = subtitleIndexerMode(process.argv.slice(2));
 let stopRequested = false;
 let processedJobs = 0;
 const lastProviderErrorLog = new Map<string, number>();
@@ -138,8 +140,8 @@ async function run(): Promise<void> {
   }
   if (seed) { await seedCatalog(); await seedValidatedArtifacts(); }
   const recovered = recoverStaleSubtitleIndexJobs(subtitleConfig.indexStaleLockMs);
-  const queued = enqueueAllEpisodes();
-  console.log(JSON.stringify({ queued, recovered, index: subtitleIndexStats() }));
+  const queued = indexerMode === 'catalog' ? enqueueAllEpisodes() : 0;
+  console.log(JSON.stringify({ mode: indexerMode, queued, recovered, index: subtitleIndexStats() }));
   do {
     const jobs = claimSubtitleIndexJobs(1);
     for (const job of jobs) await processJob(job);

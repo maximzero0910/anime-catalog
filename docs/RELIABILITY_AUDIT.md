@@ -86,3 +86,11 @@ flowchart LR
 ## Scope and operational limits
 
 This audit does not authorize deployment, Cloudflare changes, service restarts, credential changes, destructive tests, migrations of production data, or a live restore. Resource limits added here must be verified against the Pi's measured memory-controller availability and actual service workload before they are applied to production.
+
+## Superseding production status (2026-11-17)
+
+The preceding reachability finding is a historical snapshot and is resolved for the current release. Under the later explicit production-release authorization, commit `9ddf295a6bf6efe44431aeb05cb10ac1099cd501` was deployed to the Pi and Cloudflare Pages. DNS `api.anineko.eu` now points to the existing healthy tunnel, whose ingress targets `http://127.0.0.1:4321`; Pages `ANINEKO_API_ORIGIN` was set to `https://api.anineko.eu`. The reported `api-origin` 404 did not reproduce during this verification: its health path currently returns 200, so that existing compatibility route was retained.
+
+Verified on the deployed release: Pages and direct API liveness/readiness return 200; unauthenticated subtitle/Telegram administration returns 401; Chromium search returns provider results; Telegram MP4 playback advances for 11.7 seconds with H.264/AAC and byte-range delivery; a provider-sourced BG WebVTT track returns 565 cues; Pi services and the recovery timer are active; database integrity and foreign-key checks are clean. The database and 138 subtitle assets have a verified pre-deploy backup, but no production restore was performed.
+
+Remaining readiness gaps: four local E2E tests could not connect to the unavailable resolver/Worker listeners at ports 3000/8787; AllAnime returned an upstream 500 during otherwise successful search; Pi memory cgroup enforcement is unavailable; sustained resource-ceiling and disk-exhaustion behavior, off-device backups, and a production restore drill remain unverified. These gaps keep the broad reliability mission below READY.

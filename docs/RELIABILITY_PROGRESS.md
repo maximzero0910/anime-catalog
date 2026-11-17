@@ -78,14 +78,15 @@ Architecture and baseline are documented in [RELIABILITY_AUDIT.md](./RELIABILITY
 
 ## Remaining work and risks
 
-- **NOT VERIFIED:** E2E flows with Worker/API services running; browser playback journeys; Pi ARM64 clean build, proposed service-unit compatibility/restart behavior, process resource ceilings, filesystem exhaustion behavior, Tunnel health, and production/off-device backup restore.
+- **NOT VERIFIED:** the local E2E suite with its Worker/API services running; sustained Pi resource ceilings; filesystem exhaustion recovery; and a production/off-device backup restore. Production search and playback in Chromium, the Pi ARM64 clean build and systemd restart behavior, current Tunnel routing, live health checks, and a manual recovery-service run were verified on 2026-11-17.
 - **NOT IMPLEMENTED:** cross-process rate/concurrency limits, automated backup scheduling/retention/off-site encryption, host-level resource alerting, comprehensive frontend recovery coverage, database-corruption recovery runbook automation.
 - Worker DNS resolution is not pin-able at connection time using the current Cloudflare Worker fetch API; existing explicit host policy does not prove rebinding resistance there.
 - The provider interface does not carry abort signals into every running upstream request; concurrency remains occupied until those operations settle, but cancellation cannot forcibly stop all providers.
+- A fresh 2026-11-17 audit reports 11 high-severity dependency paths through picomatch (GHSA-fc5q-39xc-vjpf); no patched version is published yet, and the forced Astro downgrade suggested by npm was not applied.
 - The hardened file-download path uses ordinary Undici rather than the previous automatic Impit retry after a 403, because Impit's connection path cannot use the DNS-pinned dispatcher. SAB.BZ download compatibility should be checked against the live provider before relying on that host; broadening the transport without connection-time destination pinning would reintroduce rebinding risk.
 - Telegram sync and playback use separate roles; playback clients are slot-isolated but share the same configured StringSession. Concurrent real playback, Telegram's behavior for the multiple connections, and Pi throughput/connection budgets have not been exercised against the live account.
 - A read-only census of the current catalog's indexed source URLs found only `anima-pr.blogspot.com`, `raw.githubusercontent.com`, `subs.sab.bz`, and `subsunacs.net`; no OpenSubtitles file URL was present, so its exact `dl.opensubtitles.com` delivery hostname is configured from the provider contract but not confirmed from a stored live response.
 
 ## Status
 
-The codebase has useful local recovery controls and test evidence, but the mission definition of done is **not met**. Production operational behavior and several requested controls remain unimplemented or unverified. Do not infer production readiness from these local checks.
+The codebase has useful local recovery controls, and the 2026-11-17 release verified the Pages-to-Pi path, browser search/playback, Pi service restart, and database integrity. The broader reliability mission definition of done is still **not met**: automated/off-device backups and restore, sustained capacity behavior, some failure simulations, cross-process limits, and host-level alerting remain unimplemented or unverified. Four local E2E checks also remain blocked by unavailable services on ports 8787 and 3000; they are not counted as passing.

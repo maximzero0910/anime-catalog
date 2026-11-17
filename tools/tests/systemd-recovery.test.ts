@@ -35,6 +35,7 @@ exit 0
       'is-failed --quiet anineko-subtitles-worker.service',
       'reset-failed anineko-subtitles-worker.service',
       'start anineko-subtitles-worker.service',
+      'is-failed --quiet anineko-subtitles-indexer.service',
       'is-failed --quiet anineko-telegram-sync.service',
     ].join('\n') + '\n');
   } finally {
@@ -44,6 +45,6 @@ exit 0
 
 test('recovery script does not start inactive services or accept arbitrary unit names', () => {
   const source = readFileSync(scriptPath, 'utf8');
-  assert.match(source, /for unit in anineko-web\.service anineko-subtitles-worker\.service anineko-telegram-sync\.service/);
+  assert.match(source, /for unit in anineko-web\.service anineko-subtitles-worker\.service anineko-subtitles-indexer\.service anineko-telegram-sync\.service/);
   assert.doesNotMatch(source, /\$1|\$\{1\}|read -r unit/);
 });

@@ -1,0 +1,42 @@
+[Unit]
+Description=Anineko queued subtitle source indexer
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/srv/anineko
+StartLimitIntervalSec=10min
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=max
+Group=max
+WorkingDirectory=/srv/anineko
+EnvironmentFile=/srv/anineko/.env
+Environment=NODE_OPTIONS=--max-old-space-size=384
+ExecStart=/usr/local/bin/node --import tsx tools/subtitles-indexer.ts --watch --queued-only
+Restart=on-failure
+RestartSec=15s
+TimeoutStartSec=60s
+TimeoutStopSec=180s
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/srv/anineko
+CPUQuota=50%
+TasksMax=64
+LimitNOFILE=2048
+
+[Install]
+WantedBy=multi-user.target
