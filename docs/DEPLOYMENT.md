@@ -55,7 +55,8 @@ For frontend rollback, select the prior successful Pages deployment `b4684595-8c
 - Unauthenticated `/api/telegram/admin` returned 401 JSON.
 - `/api/stream/154587/5` selected Telegram MP4 with Bulgarian hardsub. `/api/telegram/media/32` honored `Range: bytes=0-1023` with 206, 1024 bytes, `video/mp4`, and `accept-ranges: bytes`. `ffprobe` read the public media endpoint and identified H.264 1280×720 video, AAC audio, and a 1470-second duration.
 - `/api/subtitles/1/5` returned 200 `text/vtt`, 53,557 bytes, 565 cues, language `bg`, source `provider`, score 1.0. Frieren episode 5 is hardsubbed; its subtitle endpoint correctly reported the hardsub/skip state instead of creating a translated track.
-- An Anikoto HLS probe for Frieren episode 1 returned a valid manifest, but its first media URI returned `image/jpeg`. That provider-specific HLS result is **not** counted as successful video playback. Telegram episode 5 was verified as a playable media container over HTTP range and with `ffprobe`; a timed browser playback session was not verified.
+- Chromium played Frieren episode 5 from the production watch page for 11.7 seconds (`readyState=4`, `paused=false`, no media error); the browser source was `anineko.eu`.
+- An Anikoto HLS probe for Frieren episode 1 returned a valid manifest, but its first media URI returned `image/jpeg`. That provider-specific HLS result is **not** counted as successful video playback and remains an item to diagnose separately. The verified Telegram episode 5 path is working.
 
 ## Deployment procedure
 
