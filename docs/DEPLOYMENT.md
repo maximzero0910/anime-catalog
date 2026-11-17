@@ -6,7 +6,7 @@ The frontend and backend run application commit `65e975270e159d3389c5b3f8b21e19a
 
 - Frontend: Cloudflare Pages project `anime-catalog`, domain `anineko.eu`. The project uses manual deployments (Git provider: none); deployment metadata records branch `master`, but no production branch is configured on the project.
 - Pages deployment: `be5f2f2c-5fe1-458c-82e3-504ec33b6c49`, status `success`, environment `production`, commit metadata `65e975270e159d3389c5b3f8b21e19af529c1c14`, `commit_dirty=false`, Pages Functions bundle uploaded. Deployment URL: `https://be5f2f2c.anime-catalog-e84.pages.dev`; production alias: `https://anineko.eu`.
-- Previous production deployment retained for immediate rollback: `76585599-199c-468a-a082-551c94566a34` (same application commit). Earlier fallback: `9274052f-88c9-4cfe-b59a-64a150a430c4` (commit `9ddf295a`). The Pages project uses manual deployments with no Git provider; Cloudflare reports `master` as its production branch, and the deployment metadata records `master`.
+- Prior deployment records: `76585599-199c-468a-a082-551c94566a34` (same application commit) and `9274052f-88c9-4cfe-b59a-64a150a430c4` (commit `9ddf295a`). At verification time, both deployment-specific `pages.dev` hosts returned HTTP 404, so neither is a verified serving rollback target. The Pages project uses manual deployments with no Git provider; Cloudflare reports `master` as its production branch, and the deployment metadata records `master`.
 - Pages Function routes `/api/*` to the production secret `ANINEKO_API_ORIGIN`, set to `https://api.anineko.eu`. Cloudflare redacts the secret on readback; the deployed function was verified through live API and playback requests.
 - API DNS: proxied CNAME `api.anineko.eu` to tunnel `21a48fed-d0bb-42c0-b978-6e8b13cf72e9.cfargotunnel.com`.
 - Tunnel: existing tunnel `anineko-pi-origin`, healthy, ingress `api.anineko.eu` → `http://127.0.0.1:4321`; catch-all remains `http_status:404`. The existing `api-origin.anineko.eu` compatibility DNS and ingress were retained; its health path currently returns 200, so the reported 404 is no longer reproducible.
@@ -50,7 +50,7 @@ sudo systemctl daemon-reload
 sudo systemctl restart anineko-web.service anineko-subtitles-worker.service anineko-telegram-sync.service
 ```
 
-For frontend rollback, roll the Pages project back to `76585599-199c-468a-a082-551c94566a34` in Cloudflare. The Pages origin remains configured as a secret; both frontend releases use the same `/api/*` contract. Do not restore the database for a code rollback.
+The older Pages deployments are retained in Cloudflare history, but their deployment URLs returned 404 during verification. Do not treat them as a verified rollback target. If the active asset set fails, rebuild and redeploy the pinned verified commit using the deployment procedure below, then verify `/`, `/provider-watch/`, and `/api/health/ready` before considering recovery complete. The Pages origin remains configured as a secret; do not restore the database for a frontend code rollback.
 
 ## Verification recorded for this release
 
