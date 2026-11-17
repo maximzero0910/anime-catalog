@@ -4,6 +4,7 @@ import { AniMaBgCatalogProvider, crawlAnimeBgCatalog, subtitleIndexProviders, ty
 import { claimSubtitleIndexJobs, enqueueSubtitleIndexJob, finishSubtitleIndexJob, heartbeatSubtitleIndexJob, indexedSubtitleRows, listArtifacts, providerMissActive, pruneSubtitleOperationalData, readBody, recordProviderMiss, recoverStaleSubtitleIndexJobs, storeSubtitleAsset, subtitleIndexStats, syncSubtitleProviderEnabled, upsertSubtitleIndex } from '../src/lib/subtitles/storage';
 import { startWorkerHeartbeat } from '../src/lib/worker-heartbeat';
 import { indexProviderCandidates } from '../src/lib/subtitles/index-runner';
+import { subtitleConfig } from '../src/lib/subtitles/config';
 
 // DECISION: crawl the small title catalog first and process one durable job at a time; provider concurrency caps are enforced per host.
 const watch = process.argv.includes('--watch');
@@ -136,7 +137,7 @@ async function run(): Promise<void> {
     if (requeued) console.info({ event: 'subtitle_provider_enabled_recovery', provider: provider.id, requeued });
   }
   if (seed) { await seedCatalog(); await seedValidatedArtifacts(); }
-  const recovered = recoverStaleSubtitleIndexJobs();
+  const recovered = recoverStaleSubtitleIndexJobs(subtitleConfig.indexStaleLockMs);
   const queued = enqueueAllEpisodes();
   console.log(JSON.stringify({ queued, recovered, index: subtitleIndexStats() }));
   do {

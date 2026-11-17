@@ -319,7 +319,7 @@ export function claimSubtitleIndexJobs(limit: number, now = Date.now()): Array<R
   }).immediate;
   return claim();
 }
-export function recoverStaleSubtitleIndexJobs(staleMs = 30 * 60_000, now = Date.now()): number {
+export function recoverStaleSubtitleIndexJobs(staleMs = 2 * 60_000, now = Date.now()): number {
   const cutoff = now - staleMs;
   const recover = database.transaction(() => {
     const stale = database.prepare(`SELECT id,attempts FROM subtitle_index_jobs WHERE state='RUNNING' AND locked_at IS NOT NULL AND locked_at<?`).all(cutoff) as Array<{ id: number; attempts: number }>;
