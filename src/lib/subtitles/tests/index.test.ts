@@ -4,6 +4,7 @@ import { deflateRawSync } from 'node:zlib';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { httpGet } from '../../providers/types';
 
 let root = '';
 let storage: typeof import('../storage');
@@ -150,4 +151,24 @@ test('AniMa Blogger crawl stops at the first empty page', async () => {
   };
   assert.equal((await providers.crawlAniMaCatalog(true, requester as never)).length, 1);
   assert.equal(calls, 2);
+});
+
+test('a cached validator without a stored body retries one 304 unconditionally', async () => {
+  const url = 'https://anima-pr.blogspot.com/feeds/posts/default?alt=json&max-results=500&start-index=9001';
+  let calls = 0;
+  const get = (async (_url: string, options: { headers?: Record<string, string> }) => {
+    calls++;
+    if (calls === 1) return { status: 200, text: 'x'.repeat(2 * 1024 * 1024 + 10), headers: new Headers({ etag: '"large-feed"' }), finalUrl: url };
+    if (calls === 2) {
+      assert.equal(options.headers?.['If-None-Match'], '"large-feed"');
+      return { status: 304, text: '', headers: new Headers({ etag: '"large-feed"' }), finalUrl: url };
+    }
+    assert.equal(options.headers?.['If-None-Match'], undefined);
+    return { status: 200, text: '{"feed":{"entry":[]}}', headers: new Headers({ etag: '"large-feed"' }), finalUrl: url };
+  }) as typeof httpGet;
+  await providers.requestText(url, { provider: 'anima-bg-fansubs', cache: true }, get);
+  const result = await providers.requestText(url, { provider: 'anima-bg-fansubs', cache: true }, get);
+  assert.equal(result.status, 200);
+  assert.equal(result.text, '{"feed":{"entry":[]}}');
+  assert.equal(calls, 3);
 });

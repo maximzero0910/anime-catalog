@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+release_dir=$(/usr/bin/systemctl show --property=WorkingDirectory --value anineko-web)
+release_dir=$(/usr/bin/readlink -e "$release_dir")
+case "$release_dir" in
+  /srv/anineko/releases/*) ;;
+  *) echo "Anineko web WorkingDirectory is outside the releases directory" >&2; exit 1 ;;
+esac
+
+if [ ! -f "$release_dir/tools/catalog-backup.ts" ] || [ ! -d "$release_dir/node_modules/tsx" ]; then
+  echo "The configured Anineko release does not contain the backup tool and tsx runtime" >&2
+  exit 1
+fi
+
+cd "$release_dir"
+exec /usr/local/bin/node --import tsx tools/catalog-backup.ts "$@"

@@ -1,8 +1,10 @@
 ---
 import '../../styles/global.css';
 import Brand from '../../components/Brand.astro';
+import SiteFooter from '../../components/SiteFooter.astro';
 import { getTitles, getTitle, getEpisodes, getSubtitle, getBulgarianCoverage } from '../../lib/db';
 import { matchedTelegramEpisodes } from '../../lib/telegram/storage';
+import { absoluteHttpUrl, animeDisplayTitle, animeMetaDescription, animeMetaTitle, canonicalUrl } from '../../lib/seo';
 import { readFile } from 'node:fs/promises';
 const descriptions = JSON.parse(await readFile(new URL('../../../data/descriptions.json', import.meta.url), 'utf8').catch(() => '{}')) as Record<string, string | null>;
 export function getStaticPaths() { return getTitles().map(title => ({ params: { slug: title.slug } })); }
@@ -11,28 +13,35 @@ if (!title) throw new Error(`Unknown anime slug: ${Astro.params.slug}`);
 const episodes = getEpisodes(title.id);
 const bgCoverage = getBulgarianCoverage(title.id);
 const telegramHardsubs = new Set(matchedTelegramEpisodes(title.id).filter(row => row.status === 'MATCHED' && Number(row.verified) === 1 && Number(row.primary_match) === 1).map(row => Number(row.episode_number)));
-const description = title.synopsis_bg ?? descriptions[String(title.id)] ?? 'Описание не е налично.';
-const displayTitle = title.title_bg ?? title.english ?? title.romaji ?? title.native ?? `Anime ${title.id}`;
+const synopsis = title.synopsis_bg ?? descriptions[String(title.id)];
+const description = synopsis ?? 'Описание не е налично.';
+const metaDescription = animeMetaDescription(title, synopsis);
+const metaTitle = animeMetaTitle(title);
+const displayTitle = animeDisplayTitle(title);
 const alternatives = [title.native, title.romaji, title.english, title.title_bg].filter((value): value is string => Boolean(value) && value !== displayTitle);
+const canonical = canonicalUrl(`/anime/${encodeURIComponent(title.slug)}/`);
+const socialImage = absoluteHttpUrl(title.banner ?? title.cover);
 ---
 <html lang="bg">
-  <head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="icon" href="/anineko-mark.svg" type="image/svg+xml"/><title>{displayTitle} — Anineko</title><meta name="description" content={description.replace(/<[^>]*>/g, '').slice(0, 155)}/></head>
+  <head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="icon" href="/anineko-mark.svg" type="image/svg+xml"/><title>{metaTitle}</title><meta name="description" content={metaDescription}/><meta name="robots" content="index,follow"/><link rel="canonical" href={canonical}/><meta property="og:type" content="article"/><meta property="og:site_name" content="Anineko"/><meta property="og:title" content={metaTitle}/><meta property="og:description" content={metaDescription}/><meta property="og:url" content={canonical}/>{socialImage && <meta property="og:image" content={socialImage}/>}<meta property="og:locale" content="bg_BG"/></head>
   <body>
     <header class="site-header"><div class="shell header-row"><Brand /><nav class="site-nav" aria-label="Основна навигация"><a href="/#catalog">Каталог</a><a href="/about">За проекта</a></nav><a class="nav-search" href="/#search">ТЪРСИ <span aria-hidden="true">↘</span></a></div></header>
     <main class="shell" data-pagefind-body>
       <section class="title-hero" style={title.banner ? `background-image:url('${title.banner}')` : title.cover ? `background-image:url('${title.cover}')` : ''}>
-        <div class="title-info"><p class="eyebrow">{title.format ?? 'АНИМЕ'}{title.year ? ` · ${title.year}` : ''}</p><h1>{displayTitle}</h1>{alternatives.length > 0 && <p class="alternate-titles">{alternatives.join(' · ')}</p>}<div class="meta-line">{title.season && <span>{title.season}</span>}{title.status && <span>{title.status}</span>}{title.score && <span>★ {title.score.toFixed(1)}</span>}{bgCoverage.available > 0 && <span class:list={['bg-coverage-badge', { complete: bgCoverage.complete }]}>{bgCoverage.complete ? 'BG · ПЪЛНО' : `BG · ${bgCoverage.available}/${bgCoverage.total}`}</span>}</div></div>
+        <div class="title-info"><p class="eyebrow">{title.format ?? 'АНИМЕ'}{title.year ? ` · ${title.year}` : ''}</p><h1>{displayTitle}</h1>{alternatives.length > 0 && <p class="alternate-titles">{alternatives.join(' · ')}</p>}<div class="meta-line">{title.season && <span>{title.season}</span>}{title.status && <span>{title.status}</span>}{title.score && <span>★ {title.score.toFixed(1)}</span>}<span class:list={['bg-coverage-badge', { complete: bgCoverage.complete }]} data-bg-coverage-badge data-anime-id={title.id} title={`${bgCoverage.available} от ${bgCoverage.total} епизода имат български субтитри`} hidden={bgCoverage.available === 0}>BG · {bgCoverage.complete ? 'ПЪЛНО' : 'ЧАСТИЧНО'}</span></div></div>
       </section>
       <section class="title-layout" aria-labelledby="about-title">
         {title.cover && <img class="cover" src={title.cover} alt={`Постер на ${displayTitle}`} width="460" height="650"/>}
         <div><p class="eyebrow">СИНОПСИС</p><h2 id="about-title">За анимето</h2><p class="synopsis">{description}</p></div>
       </section>
-      <section class="episodes-section" aria-labelledby="episodes-title"><div class="section-heading"><div><p class="section-kicker">{episodes.length} ЕПИЗОДА</p><h2 id="episodes-title">Епизоди</h2></div></div><div class="episodes" data-episode-list data-anime-id={title.id} data-anime-slug={title.slug} data-anime-title={displayTitle}>{episodes.map(ep => { const sub = getSubtitle(title.id, ep.number); const badge = telegramHardsubs.has(ep.number) ? 'БГ хардсаб' : sub?.status === 'qc' || sub?.status === 'final' ? 'БГ' : sub?.status === 'draft' ? 'МТ' : ''; return <a class="episode" data-episode-number={ep.number} href={`/watch/${title.slug}/${ep.number}`}><span>Епизод {ep.number}</span>{badge && <span class:list={['badge', { draft: badge === 'МТ' }]}>{badge}</span>}</a>; })}</div></section>
+      <section class="episodes-section" aria-labelledby="episodes-title"><div class="section-heading"><div><p class="section-kicker">{episodes.length} ЕПИЗОДА</p><h2 id="episodes-title">Епизоди</h2></div></div><div class="episodes" data-episode-list data-anime-id={title.id} data-anime-slug={title.slug} data-anime-title={displayTitle}>{episodes.map(ep => { const sub = getSubtitle(title.id, ep.number); const badge = telegramHardsubs.has(ep.number) ? 'БГ хардсаб' : sub?.status === 'qc' || sub?.status === 'final' ? 'БГ' : sub?.status === 'draft' ? 'МТ' : ''; return <a class="episode" data-episode-number={ep.number} href={`/watch/${title.slug}/${ep.number}`}><span>Епизод {ep.number}</span>{badge && <span class:list={['badge', { draft: badge === 'МТ' }]} data-bg-episode-badge={badge === 'БГ' ? '' : undefined}>{badge}</span>}</a>; })}</div></section>
     </main>
-    <footer class="footer"><div class="shell"><a href="/">Начало</a> · <a href="/about">За проекта</a> · <a href="/dmca">DMCA</a></div></footer>
+    <SiteFooter/>
   </body>
 </html>
 <script>
+import { refreshBulgarianCoverage } from '../../lib/bg-coverage-client';
+void refreshBulgarianCoverage();
 const list=document.querySelector<HTMLElement>('[data-episode-list]');
 if(list){
   const animeId=list.dataset.animeId!;const slug=list.dataset.animeSlug!;const title=list.dataset.animeTitle!;

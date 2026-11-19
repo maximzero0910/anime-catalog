@@ -66,6 +66,7 @@
 
 <script>
 import { ConsumetError, filterProviderResults, searchAllProviders, type ConsumetSearchResult } from '../lib/consumet';
+import { refreshBulgarianCoverage } from '../lib/bg-coverage-client';
 import type { CatalogFilters } from '../lib/catalog-filters';
 
 const form = document.querySelector<HTMLFormElement>('#provider-form');
@@ -128,13 +129,17 @@ function makeAnimeCard(anime: ConsumetSearchResult, provider: string): HTMLEleme
   const body = document.createElement('div'); body.className = 'provider-card-body';
   const title = document.createElement('h3'); const titleLink = document.createElement('a'); titleLink.className = 'provider-title-link'; titleLink.href = detailUrl(primary); titleLink.textContent = animeTitle; title.append(titleLink);
   const meta = document.createElement('p'); meta.className = 'provider-card-meta'; meta.textContent = [anime.year ?? anime.releaseDate, anime.type, anime.rating != null ? `★ ${anime.rating.toFixed(1)}` : '', ...(anime.genres ?? []).slice(0, 2)].filter(Boolean).join(' · ');
+  if (anime.anilistId) {
+    const coverage = document.createElement('span'); coverage.className = 'bg-coverage-badge'; coverage.dataset.bgCoverageBadge = ''; coverage.dataset.animeId = String(anime.anilistId); coverage.hidden = true; coverage.textContent = 'BG · ЧАСТИЧНО';
+    body.append(coverage);
+  }
   const episodesLink = document.createElement('a'); episodesLink.className = 'episode-select-link'; episodesLink.href = detailUrl(primary); episodesLink.textContent = 'Избери епизод →';
   const sourceLinks = document.createElement('div'); sourceLinks.className = 'provider-source-links'; sourceLinks.setAttribute('aria-label', 'Налични видео източници');
   for (const source of providers) {
     const label = providerNames[source.providerId] ?? source.providerId;
     const link = document.createElement('a'); link.className = 'provider-source-link'; link.href = detailUrl(source); link.textContent = label; link.setAttribute('aria-label', `${animeTitle} в ${label}`); sourceLinks.append(link);
   }
-  body.append(title, meta, episodesLink, sourceLinks); card.append(body); return card;
+  body.prepend(title, meta); body.append(episodesLink, sourceLinks); card.append(body); return card;
 }
 
 function readFilters(): CatalogFilters {
@@ -228,7 +233,7 @@ function renderResults(items: ConsumetSearchResult[]) {
   const failed = providerStatuses.filter(status => status.error);
   if (failed.length) { const note = document.createElement('p'); note.className = 'search-hint'; note.textContent = `${failed.length} източника временно не отговориха; показани са намерените резултати.`; results.append(count, note); }
   else results.append(count);
-  const grid = document.createElement('div'); grid.className = 'provider-grid'; for (const anime of items) grid.append(makeAnimeCard(anime, anime.providerId ?? 'anikoto')); results.append(grid);
+  const grid = document.createElement('div'); grid.className = 'provider-grid'; for (const anime of items) grid.append(makeAnimeCard(anime, anime.providerId ?? 'anikoto')); results.append(grid); void refreshBulgarianCoverage(grid);
 }
 
 function signature() { return JSON.stringify([activeProvider, activeQuery, rawResults.map(item => item.id), readFilters()]); }

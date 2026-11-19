@@ -106,19 +106,30 @@ function rememberProviderCookies(url: string, headers: Headers): void {
   sabCookies.set(hostname, [...jar].map(([name, value]) => `${name}=${value}`).join('; '));
 }
 
-async function requestText(url: string, options: { provider: string; method?: 'GET' | 'POST'; body?: string; headers?: Record<string, string>; referer?: string; timeoutMs?: number; cache?: boolean; json?: boolean; allowStatuses?: number[]; retry403?: boolean } ): Promise<TextResult> {
+export async function requestText(url: string, options: { provider: string; method?: 'GET' | 'POST'; body?: string; headers?: Record<string, string>; referer?: string; timeoutMs?: number; cache?: boolean; json?: boolean; allowStatuses?: number[]; retry403?: boolean }, get: typeof httpGet = httpGet): Promise<TextResult> {
   const method = options.method ?? 'GET';
   const key = cacheKey(method, url, options.body ?? '');
   const cached = options.cache ? indexerHttpCache(key) : undefined;
-  const headers = { ...(options.headers ?? {}), ...(cached?.etag ? { 'If-None-Match': cached.etag } : {}), ...(cached?.lastModified ? { 'If-Modified-Since': cached.lastModified } : {}) };
+  const conditionalHeaders = { ...(options.headers ?? {}), ...(cached?.etag ? { 'If-None-Match': cached.etag } : {}), ...(cached?.lastModified ? { 'If-Modified-Since': cached.lastModified } : {}) };
+  let headers = conditionalHeaders;
+  let retriedUnconditionally = false;
   return withHostSlot(url, async () => {
     const attempts = options.retry403 ? 3 : 4;
     for (let attempt = 0; attempt < attempts; attempt++) {
       const response = method === 'POST'
         ? await httpPost(url, options.body ?? '', { provider: options.provider, headers: { ...(options.json ? { 'content-type': 'application/json' } : {}), ...headersForProvider(url, headers) }, referer: options.referer, timeoutMs: options.timeoutMs ?? 15000, retries: 0, returnHttpErrors: true, returnBlockedResponse: options.retry403 })
-        : await httpGet(url, { provider: options.provider, headers: headersForProvider(url, headers), referer: options.referer, timeoutMs: options.timeoutMs ?? 15000, retries: 0, returnHttpErrors: true, returnBlockedResponse: options.retry403 });
+        : await get(url, { provider: options.provider, headers: headersForProvider(url, headers), referer: options.referer, timeoutMs: options.timeoutMs ?? 15000, retries: 0, returnHttpErrors: true, returnBlockedResponse: options.retry403 });
       rememberProviderCookies(url, response.headers);
-      if (response.status === 304 && cached?.body != null) return { ...response, status: cached.status ?? 200, text: cached.body };
+      if (response.status === 304) {
+        if (cached?.body != null) return { ...response, status: cached.status ?? 200, text: cached.body };
+        // Large cached feeds may retain validators without retaining a body. A 304 is unusable
+        // in that case, so make one bounded unconditional request instead of treating it as empty.
+        if (!retriedUnconditionally) {
+          retriedUnconditionally = true;
+          headers = options.headers ?? {};
+          continue;
+        }
+      }
       if (response.status === 403 && options.retry403) {
         if (attempt + 1 >= attempts) throw new Error(`${options.provider} returned HTTP 403 after ${attempts} browser-header attempts`);
         await new Promise(resolve => setTimeout(resolve, 10_000));

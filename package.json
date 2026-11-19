@@ -17,13 +17,14 @@
     "subtitles:worker": "node --import tsx tools/subtitles-worker.ts",
     "subtitles:index": "node --import tsx tools/subtitles-indexer.ts --watch",
     "subtitles:index:seed": "node --import tsx tools/subtitles-indexer.ts --seed",
+    "subtitles:queue:kaggle": "node --import tsx tools/enqueue-kaggle-translations.ts",
+    "anilist:sync-popularity": "node --import tsx tools/sync-anilist-popularity.ts",
     "telegram:sync": "node --import tsx tools/telegram-sync.ts --watch",
     "telegram:sync:once": "node --import tsx tools/telegram-sync.ts --once",
     "telegram:session": "node --import tsx tools/telegram-session.ts",
     "telegram:catalog-import": "node --import tsx tools/telegram-catalog-import.ts",
     "telegram:rematch": "node --import tsx tools/telegram-rematch.ts",
     "subtitles:test": "node --import tsx --test src/lib/subtitles/tests/*.test.ts",
-    "subtitles:test:local": "node --import tsx --test src/lib/subtitles/tests/inference.test.ts",
     "deploy:worker": "wrangler deploy"
   },
   "dependencies": {

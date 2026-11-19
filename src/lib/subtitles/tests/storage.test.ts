@@ -54,11 +54,17 @@ test('repeated worker crashes reach the retry ceiling and dead-letter instead of
   assert.ok(storage.deadLetters().some((row) => row.job_id === job.id));
 });
 
-test('source misses become terminal SKIPPED and aliases plus subtitle offsets persist', () => {
+test('source misses remain skipped during their cache window and become eligible for rediscovery after expiry', () => {
   const job = storage.enqueueJob(21, 3);
-  storage.skipJobForNoSubtitleSource(job.id);
+  storage.skipJobForNoSubtitleSource(job.id, 'no subtitle source', 60_000);
   assert.equal(storage.getJob(job.id)?.status, 'SKIPPED');
   assert.equal(storage.getJob(job.id)?.error, 'no subtitle source');
+  assert.equal(storage.enqueueOnDemandJob(21, 3).status, 'SKIPPED');
+  const db = new Database(databasePath);
+  db.prepare('UPDATE subtitle_jobs SET available_at=? WHERE id=?').run(Date.now() - 1, job.id);
+  db.close();
+  assert.equal(storage.enqueueOnDemandJob(21, 3).status, 'QUEUED');
+  storage.updateJob(job.id, 'SKIPPED', { error: 'test complete' });
   storage.addSubtitleTitleAlias(21, 'playtube', 'Примерно заглавие');
   assert.equal(storage.subtitleTitleAliases(21, 'playtube')[0]?.source_title, 'Примерно заглавие');
   storage.setSubtitleOffset(21, 3, 'playtube', 250);
@@ -66,6 +72,22 @@ test('source misses become terminal SKIPPED and aliases plus subtitle offsets pe
   assert.deepEqual(storage.subtitleOffsets(21, 3), { playtube: 250 });
   storage.saveSubtitleHardsub({ animeId: 21, episode: 3, sourceId: 'playtube', sourceTitle: 'Примерно заглавие', sourceUrl: 'https://playtube.tv/watch/episode' });
   assert.equal(storage.getSubtitleHardsub(21, 3)?.source_id, 'playtube');
+});
+
+test('background queue refill only requeues expired no-source results and respects its batch limit', () => {
+  const first = storage.enqueueJob(21, 1);
+  const second = storage.enqueueJob(21, 2);
+  storage.skipJobForNoSubtitleSource(first.id, 'no subtitle source', 60_000);
+  storage.skipJobForNoSubtitleSource(second.id, 'no usable English or Japanese subtitle source', 60_000);
+  const db = new Database(databasePath);
+  db.prepare('UPDATE subtitle_jobs SET available_at=? WHERE id IN (?,?)').run(Date.now() - 1, first.id, second.id);
+  db.close();
+  assert.equal(storage.requeueExpiredSubtitleSources(1), 1);
+  assert.equal([storage.getJob(first.id), storage.getJob(second.id)].filter(job => job?.status === 'QUEUED').length, 1);
+  assert.equal(storage.requeueExpiredSubtitleSources(1), 1);
+  assert.equal([storage.getJob(first.id), storage.getJob(second.id)].filter(job => job?.status === 'QUEUED').length, 2);
+  storage.updateJob(first.id, 'SKIPPED', { error: 'test complete' });
+  storage.updateJob(second.id, 'SKIPPED', { error: 'test complete' });
 });
 
 test('fresh on-demand work is claimed before the older bulk-discovery backlog', () => {
@@ -83,7 +105,7 @@ test('content-addressed bodies and validated cache entries are reused by config 
   const savedOutput = await storage.saveBody(body, 'vtt');
   const repeated = await storage.saveBody(body, 'vtt');
   assert.equal(repeated.path, savedOutput.path);
-  const id = storage.storeValidatedArtifact({ animeId: 21, seasonId: null, episodeId: '1', sourceLanguage: 'en', targetLanguage: 'bg', sourceHash: savedSource.hash, model: 'local-qwen', configHash: 'config-a', sourceFormat: 'vtt', translatedFormat: 'vtt', sourcePath: savedSource.path, translatedPath: savedOutput.path, score: 0.98 });
+  const id = storage.storeValidatedArtifact({ animeId: 21, seasonId: null, episodeId: '1', sourceLanguage: 'en', targetLanguage: 'bg', sourceHash: savedSource.hash, model: 'provider:editsub', configHash: 'config-a', sourceFormat: 'vtt', translatedFormat: 'vtt', sourcePath: savedSource.path, translatedPath: savedOutput.path, score: 0.98 });
   assert.equal(storage.findCachedArtifact(savedSource.hash, 'bg', 'config-a', '3')?.id, id);
   assert.equal(storage.findCachedArtifact(savedSource.hash, 'bg', 'config-b', '3'), undefined);
   assert.equal(storage.existingBulgarian(21, 1), true);
@@ -132,6 +154,9 @@ test('discovery stages languages and claims English before Japanese sources', ()
   const remainingDiscovery = storage.claimUndiscoveredJobs(1);
   assert.equal(remainingDiscovery[0]!.anime_id, 22);
   storage.updateJob(episodeB.id, 'QUEUED', { sourceLanguage: 'en', checkpoint: { sourceTrack: { language: 'en', url: 'https://example.test/en.vtt' } }, lockedAt: null });
+  const isolated = new Database(databasePath);
+  isolated.prepare('UPDATE subtitle_jobs SET priority=0 WHERE id IN (?,?)').run(episodeA.id, episodeB.id);
+  isolated.close();
   const claimed = storage.claimJobs(1);
   assert.equal(claimed[0]!.anime_id, 22);
 });
@@ -151,7 +176,7 @@ test('validated translations never overwrite an existing final manual subtitle',
   database.close();
   const source = await storage.saveBody('source text', 'srt');
   const output = await storage.saveBody('validated text', 'srt');
-  storage.storeValidatedArtifact({ animeId: 21, seasonId: null, episodeId: '2', sourceLanguage: 'ja', targetLanguage: 'bg', sourceHash: source.hash, model: 'local-qwen', configHash: 'config-c', sourceFormat: 'srt', translatedFormat: 'srt', sourcePath: source.path, translatedPath: output.path, score: 0.9 });
+  storage.storeValidatedArtifact({ animeId: 21, seasonId: null, episodeId: '2', sourceLanguage: 'ja', targetLanguage: 'bg', sourceHash: source.hash, model: 'provider:editsub', configHash: 'config-c', sourceFormat: 'srt', translatedFormat: 'srt', sourcePath: source.path, translatedPath: output.path, score: 0.9 });
   const check = new Database(databasePath, { readonly: true });
   assert.deepEqual(check.prepare('SELECT path,source,status,translator FROM subs WHERE title_id=21 AND number=2').get(), { path: 'manual/2.vtt', source: 'manual', status: 'final', translator: 'Редакция' });
   check.close();

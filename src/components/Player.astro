@@ -106,6 +106,7 @@ if (root && frame) {
   let translationPending = false;
   let subtitleSelectionVersion = 0;
   const subtitleSelect = document.querySelector<HTMLSelectElement>('[data-subtitle-select]')!;
+  const subtitleUnavailableNote = document.querySelector<HTMLElement>('[data-subtitle-unavailable]');
   const subtitleRetryButton = document.querySelector<HTMLButtonElement>('[data-subtitle-retry]')!;
   const qualitySelect = document.querySelector<HTMLSelectElement>('[data-quality]')!;
   const savePrefs = () => localStorage.setItem(preferenceKey, JSON.stringify(prefs));
@@ -113,6 +114,10 @@ if (root && frame) {
   const fallbackPanel = document.querySelector<HTMLElement>('[data-fallback-panel]')!;
   const sourceToggle = document.querySelector<HTMLButtonElement>('[data-source-toggle]')!;
   const sourceOptions = document.querySelector<HTMLElement>('[data-source-options]')!;
+  const updateSubtitleAvailability = () => {
+    const hasBulgarian = [...subtitleChoices.values()].some(choice => choice.language.toLowerCase().startsWith('bg') || /българ/i.test(choice.label));
+    if (subtitleUnavailableNote) subtitleUnavailableNote.hidden = hasBulgarian || translationPending;
+  };
   if (root.dataset.anilistId === '0') sourceToggle.hidden = true;
   sourceToggle.addEventListener('click', async () => {
     const opening = sourceOptions.hidden;
@@ -297,6 +302,7 @@ if (root && frame) {
       catalogOnlySubtitle = response.headers.get('x-subtitle-catalog-only') === 'true';
       if (response.status === 202) {
         translationPending = true;
+        updateSubtitleAvailability();
         subtitleSelect.querySelector('option[value="bg-unavailable"]')?.remove();
         const pending = new Option('Български · превежда се', 'bg-pending');
         pending.disabled = true;
@@ -321,16 +327,17 @@ if (root && frame) {
         return;
       }
       if (!response.ok) response = await fetch(`/subs/${encodeURIComponent(slug)}/${ep}.vtt`, { signal: AbortSignal.timeout(8000) });
-      if (!response.ok) { subtitleRetryButton.hidden = false; return; }
+      if (!response.ok) { subtitleRetryButton.hidden = false; updateSubtitleAvailability(); return; }
       translationPending = false;
       subtitleSelect.querySelector('option[value="bg-pending"]')?.remove();
       const translated = response.headers.get('x-subtitle-source') === 'machine-translated';
       const label = translated ? 'Български · машинен превод' : 'Български';
       const raw = await response.text();
-      if (!raw.trimStart().startsWith('WEBVTT')) { subtitleRetryButton.hidden = false; return; }
+      if (!raw.trimStart().startsWith('WEBVTT')) { subtitleRetryButton.hidden = false; updateSubtitleAvailability(); return; }
       addSubtitleChoice('local-bg', { kind: 'external', label, language: 'bg', format: 'vtt' });
       const track = await installExternalTrack('local-bg', label, 'bg', raw, 'vtt', translated);
       activeTextTrack = track;
+      updateSubtitleAvailability();
       const choice = subtitleSelect.querySelector<HTMLOptionElement>('option[value="local-bg"]');
       if (choice) choice.textContent = label;
       subtitleRetryButton.hidden = true;
@@ -341,6 +348,7 @@ if (root && frame) {
       const pending = subtitleSelect.querySelector<HTMLOptionElement>('option[value="bg-pending"]');
       if (pending) { pending.disabled = true; pending.textContent = 'Български · проверката е прекъсната'; }
       translationPending = false;
+      updateSubtitleAvailability();
       console.info('Bulgarian subtitle lookup did not complete', error);
     }
   };
@@ -377,6 +385,7 @@ if (root && frame) {
       subtitleSelect.add(unavailable);
     }
     if (!subtitleChoices.size) subtitleSelect.options[0]!.textContent = 'Автоматично · няма налични субтитри';
+    updateSubtitleAvailability();
     const saved = prefs.subtitleTrack && prefs.subtitleTrack !== 'auto' && prefs.subtitleTrack !== 'off' && subtitleChoices.has(prefs.subtitleTrack) ? prefs.subtitleTrack : 'auto';
     subtitleSelect.value = prefs.subtitles ? saved : 'off';
     await applySubtitleChoice(subtitleSelect.value);
@@ -451,7 +460,8 @@ if (root && frame) {
       }
       if (sourceKind === 'mp4') qualitySelect.closest('label')?.setAttribute('hidden', '');
       const [{ default: Hls }, { VidstackPlayer, VidstackPlayerLayout }] = await Promise.all([
-        providerWatch ? import('hls.js/light') : import('hls.js'), import('vidstack/global/player'),
+        // DECISION: provider HLS manifests can carry a separate audio rendition; hls.js/light stubs its audio controllers.
+        import('hls.js'), import('vidstack/global/player'),
       ]);
       // Set the source before Vidstack connects the custom element. Assigning `src` only after
       // create() leaves SourceSelection without a loader in the browser build used here.

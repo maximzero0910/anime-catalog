@@ -1,11 +1,12 @@
 ---
 import '../styles/global.css';
 import Brand from '../components/Brand.astro';
+import SiteFooter from '../components/SiteFooter.astro';
 ---
 <html lang="bg">
   <head>
     <meta charset="utf-8"/><meta name="viewport" content="width=device-width"/>
-    <link rel="icon" href="/anineko-mark.svg" type="image/svg+xml"/><title>Избери епизод — Anineko</title>
+    <link rel="icon" href="/anineko-mark.svg" type="image/svg+xml"/><meta name="robots" content="noindex,nofollow"/><title>Избери епизод — Anineko</title>
   </head>
   <body>
     <header class="site-header">
@@ -22,7 +23,7 @@ import Brand from '../components/Brand.astro';
         <div class="episodes provider-episodes" data-episode-list aria-live="polite"><p class="search-message">Зареждане на епизодите…</p></div>
       </section>
     </main>
-    <footer class="footer"><div class="shell"><a href="/#search">Към търсенето</a> · Български субтитри, когато са налични.</div></footer>
+    <SiteFooter/>
   </body>
 </html>
 

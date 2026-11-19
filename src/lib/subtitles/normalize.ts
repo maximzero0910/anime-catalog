@@ -22,6 +22,8 @@ function assertCueCapacity(current: number, body: string): void {
 
 function parseTime(value: string): number {
   const normalized = value.trim().replace(',', '.');
+  const short = normalized.match(/^(\d{1,2}):(\d{2})\.(\d{1,3})$/);
+  if (short) return ((Number(short[1]) * 60 + Number(short[2])) * 1000) + Number(short[3].padEnd(3, '0'));
   const match = normalized.match(/^(?:(\d+):)?(\d{1,2}):(\d{2})\.(\d{1,3})$/);
   if (!match) throw new Error(`Invalid subtitle timestamp: ${value}`);
   return (((Number(match[1] ?? 0) * 60 + Number(match[2])) * 60 + Number(match[3])) * 1000) + Number(match[4].padEnd(3, '0'));
@@ -92,9 +94,9 @@ export function parseSubtitle(input: string, preferred?: SubtitleFormat): Normal
     const usedIds = new Set<string>();
     for (const block of blocks) {
       const lines = block.split('\n');
-      const timeIndex = lines.findIndex(line => /\d{1,2}:\d{2}:\d{2}[.,]\d{1,3}\s*-->\s*\d{1,2}:\d{2}:\d{2}[.,]\d{1,3}/.test(line));
+      const timeIndex = lines.findIndex(line => /\d{1,2}:\d{2}(?::\d{2})?[.,]\d{1,3}\s*-->\s*\d{1,2}:\d{2}(?::\d{2})?[.,]\d{1,3}/.test(line));
       if (timeIndex < 0) continue;
-      const match = lines[timeIndex]!.match(/(\d{1,2}:\d{2}:\d{2}[.,]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[.,]\d{1,3})/);
+      const match = lines[timeIndex]!.match(/(\d{1,2}:\d{2}(?::\d{2})?[.,]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}(?::\d{2})?[.,]\d{1,3})/);
       if (!match) continue;
       const start = parseTime(match[1]!); const end = parseTime(match[2]!);
       if (end <= start) continue;

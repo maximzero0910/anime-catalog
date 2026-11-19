@@ -1,5 +1,62 @@
 ---
 import '../styles/global.css';
 import Brand from '../components/Brand.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+import { canonicalUrl } from '../lib/seo';
 ---
-<html lang="bg"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="icon" href="/anineko-mark.svg" type="image/svg+xml"/><title>DMCA — Anineko</title></head><body><header class="site-header"><div class="shell header-row"><Brand /><nav class="site-nav"><a href="/">Каталог</a><a href="/about">За сайта</a></nav></div></header><main class="shell"><h1>Известия за авторски права / Copyright notices</h1><div class="legal"><section lang="bg"><h2>Български</h2><p>Изпратете известие за предполагаемо нарушение до <a href="mailto:dmca@example.com">dmca@example.com</a>. Валидното известие трябва да включва:</p><ul><li>физически или електронен подпис на упълномощеното лице;</li><li>описание на защитеното произведение;</li><li>идентификация и точно местоположение на материала, за който се твърди, че нарушава права;</li><li>име, адрес, телефон и имейл за връзка;</li><li>декларация за добросъвестно убеждение, че използването не е разрешено;</li><li>декларация, че информацията е точна и под наказателна отговорност, че подателят е упълномощен.</li></ul><p>След получаване на валидно известие ще премахнем или блокираме достъпа до посоченото съдържание в рамките на 48 часа.</p></section><section lang="en"><h2>English</h2><p>Send notices of alleged infringement to <a href="mailto:dmca@example.com">dmca@example.com</a>. A valid notice must include:</p><ul><li>a physical or electronic signature of an authorized person;</li><li>identification of the copyrighted work;</li><li>identification and exact location of the material claimed to be infringing;</li><li>your name, address, telephone number, and email address;</li><li>a good-faith statement that the use is unauthorized;</li><li>a statement that the information is accurate and, under penalty of perjury, that you are authorized to act.</li></ul><p>We will remove or disable access to identified content within 48 hours after receiving a valid notice.</p></section></div><!-- TODO: Add the designated agent registered with the U.S. Copyright Office. --></main></body></html>
+<html lang="bg">
+  <head>
+    <meta charset="utf-8"/><meta name="viewport" content="width=device-width"/>
+    <link rel="icon" href="/anineko-mark.svg" type="image/svg+xml"/>
+    <title>Политика за авторски права — Anineko</title>
+    <meta name="description" content="Как да подадете сигнал за материали или връзки в Anineko, които според вас нарушават права."/>
+    <meta name="robots" content="index,follow"/><link rel="canonical" href={canonicalUrl('/dmca/')}/>
+    <meta property="og:type" content="website"/><meta property="og:site_name" content="Anineko"/>
+    <meta property="og:title" content="Политика за авторски права — Anineko"/>
+    <meta property="og:description" content="Как да подадете сигнал за материали или връзки в Anineko, които според вас нарушават права."/>
+    <meta property="og:url" content={canonicalUrl('/dmca/')}/>
+  </head>
+  <body>
+    <header class="site-header"><div class="shell header-row"><Brand/><nav class="site-nav"><a href="/">Каталог</a><a href="/about/">За проекта</a></nav></div></header>
+    <main class="shell legal-copy">
+      <h1>Сигнали за авторски права / Copyright reports</h1>
+      <div class="legal">
+        <section lang="bg">
+          <h2>Български</h2>
+          <p>Anineko е некомерсиален хоби проект без реклами и платени абонаменти. Сайтът каталогизира заглавия, предоставя връзки към външни видео източници и самостоятелно създава и разпространява български преводи на субтитри. Източници могат да бъдат открити чрез външни доставчици или предложени от общността. Некомерсиалният характер и външният хостинг сами по себе си не освобождават никого от приложимите правила за авторско право.</p>
+          <p>Изпратете сигнал до <a href="mailto:legal@anineko.eu">legal@anineko.eu</a>. За да можем да го проверим, включете:</p>
+          <ul>
+            <li>вашето име и начин за връзка, както и дали действате като правоносител или упълномощен представител;</li>
+            <li>описание на защитеното произведение и основанието, на което подавате сигнала;</li>
+            <li>точен URL в Anineko и достатъчно подробности за заглавието, епизода, видеовръзката или файла със субтитри;</li>
+            <li>кратко обяснение защо според вас използването или връзката не е разрешена;</li>
+            <li>декларация, че предоставената информация е вярна и че имате право да подадете сигнала.</li>
+          </ul>
+          <h3>Преглед и действия</h3>
+          <p>Ще прегледаме сигнала и при нужда ще поискаме допълнителни данни. Когато сигналът е достатъчно конкретен и има правдоподобно основание, можем временно да скрием или изключим спорната връзка или субтитър, докато проверяваме случая. Това не премахва материал от външната платформа; за такова действие може да е необходимо да се свържете и с нея.</p>
+          <p>Когато е възможно и подходящо, ще уведомим засегнатия подател на връзката или съдържанието и ще разгледаме предоставен отговор. Ако установим, че ограничението е било погрешно или спорът е разрешен, можем да възстановим връзката или файла, освен ако законно разпореждане или друго приложимо основание не налага друго. Ще съхраняваме само необходимите сведения за разглеждане на сигнала и последващо проследяване.</p>
+          <p>Стремим се да направим първоначален преглед до 48 часа, когато това е практически възможно. Това е доброволен ангажимент на услугата, а не законов срок или гаранция за премахване в рамките на 48 часа.</p>
+          <p>Ако сигналът се отнася до законодателство на САЩ, можете да посочите това и да включите относимата информация; позоваване на DMCA не е задължително за сигнали по българското или европейското право. Тази процедура не заявява предварително приложимост или освобождаване от отговорност по DSA или друго законодателство.</p>
+        </section>
+        <section lang="en">
+          <h2>English</h2>
+          <p>Anineko is a non-commercial hobby project with no advertisements or paid subscriptions. It catalogues titles, links to external video sources, and independently creates and distributes Bulgarian subtitle translations. Sources may be found through external providers or submitted by the community. Non-commercial operation and external hosting do not by themselves remove obligations under applicable copyright law.</p>
+          <p>Send a report to <a href="mailto:legal@anineko.eu">legal@anineko.eu</a>. Please include:</p>
+          <ul>
+            <li>your name and contact details, and whether you are the rights holder or an authorized representative;</li>
+            <li>a description of the protected work and the basis for your report;</li>
+            <li>the exact Anineko URL and enough detail to identify the title, episode, video link, or subtitle file;</li>
+            <li>a short explanation of why you believe the use or link is unauthorized;</li>
+            <li>a statement that the information is accurate and that you are entitled to submit the report.</li>
+          </ul>
+          <h3>Review and action</h3>
+          <p>We will review the report and may ask for additional information. If a report is specific and has a plausible basis, we may temporarily hide or disable the disputed link or subtitle while we review it. This does not remove material from an external platform; you may also need to contact that platform.</p>
+          <p>Where practical and appropriate, we will notify the person who submitted the affected link or content and consider their response. If we find that a restriction was mistaken or the dispute has been resolved, we may restore the link or file unless a lawful order or other applicable reason requires otherwise. We will retain only the information needed to handle and follow up on the report.</p>
+          <p>Where practical, we aim to make an initial review within 48 hours. This is a voluntary service target, not a statutory deadline or a guarantee that material will be removed within 48 hours.</p>
+          <p>If your report concerns United States law, identify that and include the relevant information. A DMCA reference is not required for reports under Bulgarian or EU law. This process does not make a blanket claim about DSA applicability or liability exemptions.</p>
+        </section>
+      </div>
+    </main>
+    <SiteFooter/>
+  </body>
+</html>

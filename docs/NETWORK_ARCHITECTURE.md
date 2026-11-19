@@ -14,7 +14,7 @@ The production API hostname and Tunnel were not verified from this checkout. `wr
 ## Exposure policy
 
 - Public: Pages frontend, explicitly needed `/api/*` routes, and public health/readiness response.
-- Private: Pi SSH, SQLite files, worker controls, admin dashboards, local inference, and any future database/cache service.
+- Private: Pi SSH, SQLite files, worker controls, admin dashboards, and any future database/cache service.
 - Tunnel ingress should target only the API listener bound to loopback or a private interface. Do not add SSH or database ingress.
 - Firewall should allow outbound HTTPS and established Tunnel traffic, plus SSH only from a trusted management network. No router port-forwarding is required for the API when Tunnel is used.
 

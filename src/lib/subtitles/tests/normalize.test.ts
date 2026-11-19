@@ -49,6 +49,13 @@ test('WebVTT cues preserve IDs, speaker metadata and time values', () => {
   assert.equal(parseSubtitle(serialized, 'vtt').cues[0]!.id, 'hero');
 });
 
+test('WebVTT accepts mm:ss.mmm timestamps used by short episode captions', () => {
+  const subtitle = parseSubtitle('WEBVTT\n\n00:01.668 --> 00:02.878\nCaption\n', 'vtt');
+  assert.equal(subtitle.cues.length, 1);
+  assert.equal(subtitle.cues[0]!.start, 1668);
+  assert.equal(subtitle.cues[0]!.end, 2878);
+});
+
 test('QA rejects timestamp drift, duplicate IDs, empty and untranslated cues', () => {
   const source = parseSubtitle(['Hello!', 'Come on!', 'Wait!', 'Go!'].map((text, index) => `${index + 1}\n00:00:0${index + 1},000 --> 00:00:0${index + 2},000\n${text}`).join('\n\n'), 'srt');
   const translated = { ...source, cues: source.cues.map((cue, index) => ({ ...cue, id: index === 1 ? source.cues[0]!.id : cue.id, originalText: index === 1 ? '' : cue.originalText, start: index === 0 ? cue.start + 10 : cue.start })) };
@@ -75,6 +82,30 @@ test('QA rejects untranslated Latin fragments mixed into Bulgarian cues', () => 
 test('QA allows short retained character or organization names within Bulgarian text', () => {
   const source = parseSubtitle('1\n00:00:01,000 --> 00:00:02,000\nHer family owns the Shinomiya Group\n', 'srt');
   const translated = { ...source, cues: source.cues.map(cue => ({ ...cue, originalText: 'Семейството ѝ притежава Shinomiya Group' })) };
+  assert.equal(validateTranslation(source, translated, []).valid, true);
+});
+
+test('QA allows longer proper-name runs and Latin-script character names', () => {
+  const source = parseSubtitle('1\n00:00:01,000 --> 00:00:02,000\n東京卍會が来た\n\n2\n00:00:03,000 --> 00:00:04,000\nミケイ\n', 'srt');
+  const translated = { ...source, cues: source.cues.map((cue, index) => ({
+    ...cue,
+    originalText: index === 0 ? 'Tokyo Manji Gang пристигна.' : 'Mikey',
+  })) };
+  assert.equal(validateTranslation(source, translated, []).valid, true);
+});
+
+test('QA does not treat English dialogue as a retained name or title', () => {
+  const source = parseSubtitle('1\n00:00:01,000 --> 00:00:02,000\n心配しないで\n', 'srt');
+  for (const text of ['Не се тревожи, I love you.', 'Не, GET OUT!']) {
+    const translated = { ...source, cues: source.cues.map(cue => ({ ...cue, originalText: text })) };
+    assert.equal(validateTranslation(source, translated, []).valid, false);
+    assert.ok(validateTranslation(source, translated, []).issues.some(issue => issue.startsWith('untranslated-latin-fragment:')));
+  }
+});
+
+test('QA permits acronyms and removes ASS line-break controls from language checks', () => {
+  const source = parseSubtitle('[Script Info]\nScriptType: v4.00+\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,NERVが来た\\NHello!', 'ass');
+  const translated = { ...source, cues: source.cues.map(cue => ({ ...cue, originalText: 'NERV пристигна.\\NЗдравей!' })) };
   assert.equal(validateTranslation(source, translated, []).valid, true);
 });
 

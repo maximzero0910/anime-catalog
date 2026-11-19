@@ -1,0 +1,92 @@
+---
+import '../styles/global.css';
+import Brand from '../components/Brand.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+import { canonicalUrl } from '../lib/seo';
+---
+<html lang="bg">
+  <head>
+    <meta charset="utf-8"/><meta name="viewport" content="width=device-width"/>
+    <link rel="icon" href="/anineko-mark.svg" type="image/svg+xml"/>
+    <title>Политика за поверителност — Anineko</title>
+    <meta name="description" content="Как Anineko обработва технически данни и заявки за контакт, какви доставчици участват и как можете да упражните правата си."/>
+    <meta name="robots" content="index,follow"/><link rel="canonical" href={canonicalUrl('/privacy/')}/>
+    <meta property="og:type" content="website"/><meta property="og:site_name" content="Anineko"/>
+    <meta property="og:title" content="Политика за поверителност — Anineko"/>
+    <meta property="og:description" content="Информация за личните данни и поверителността в Anineko."/>
+    <meta property="og:url" content={canonicalUrl('/privacy/')}/>
+  </head>
+  <body>
+    <header class="site-header"><div class="shell header-row"><Brand/><nav class="site-nav"><a href="/">Каталог</a><a href="/about/">За проекта</a></nav></div></header>
+    <main class="shell legal-copy privacy-policy">
+      <h1>Политика за поверителност / Privacy Policy</h1>
+      <p class="policy-updated">Последна актуализация / Last updated: 18 November 2026</p>
+      <aside class="policy-confirmation">
+        <strong>Потвърждение от администратора / Administrator confirmation required</strong>
+        <p>Кодът не посочва юридическото име и адреса на оператора, договорните роли на някои доставчици или сроковете за съхранение на инфраструктурните логове. Тези данни трябва да бъдат потвърдени и попълнени от администратора преди публикуване като окончателна правна информация.</p>
+        <p>The code does not identify the operator’s legal name and address, the contractual roles of some providers, or infrastructure-log retention periods. The administrator must confirm these facts before treating this as final legal information.</p>
+      </aside>
+      <div class="legal">
+        <section lang="bg">
+          <h2>Български</h2>
+          <h3>1. Кой обработва данните</h3>
+          <p>Проектът се нарича Anineko. За въпроси относно лични данни пишете на <a href="mailto:legal@anineko.eu">legal@anineko.eu</a>. Юридическото име и пощенският адрес на лицето или организацията, която определя целите и средствата на обработването, трябва да бъдат потвърдени от администратора.</p>
+          <h3>2. Какви данни обработваме</h3>
+          <ul>
+            <li><strong>Технически данни при заявка:</strong> IP адрес и технически данни като браузър, време, маршрут и статус на заявката могат да бъдат обработени от Cloudflare и инфраструктурата, през която минава трафикът. Pages функцията подписва клиентския IP адрес при предаване към бекенда за ограничаване на заявките. Бекендът използва хеширана идентичност в ограничител с кратък престой в паметта; кодът не записва суровия IP адрес в каталожната база като профил.</li>
+            <li><strong>Използване на плеъра:</strong> предпочитания като качество и показване на субтитри се пазят в <code>localStorage</code> на вашия браузър, обвързани с аниме. Те не се синхронизират с профил, защото публични потребителски профили няма.</li>
+            <li><strong>Административен достъп:</strong> ако сте администратор и въведете токен в административна страница, страницата може да го пази в <code>sessionStorage</code> до края на сесията на раздела. Тези страници не са обичайна функция за посетители. Не изпращайте административен токен по имейл.</li>
+            <li><strong>Имейл:</strong> ако ни пишете, обработваме адреса, името и съдържанието, което доброволно изпратите, за да отговорим и да обработим заявката.</li>
+          </ul>
+          <h3>3. Цели и правни основания</h3>
+          <p>Техническите данни се използват за доставяне на страниците и API, ограничаване на злоупотреби, защита и диагностика на услугата. Предварителното основание, което операторът трябва да потвърди, е легитимен интерес за сигурна и работеща услуга. Имейлът се използва за отговор на започната от вас комуникация и за обработка на искане; приложимото основание зависи от вида на искането и трябва да се потвърди от оператора. Данните могат да се обработват и когато това е необходимо за изпълнение на законово задължение.</p>
+          <h3>4. Бисквитки и проследяване</h3>
+          <p>В приложния код не открихме аналитичен тракер, рекламна мрежа или приложение, което да задава бисквитки. Плеърът използва локално хранилище за предпочитания. Cloudflare може да използва технически бисквитки или подобни средства за сигурност и доставяне според активните настройки; това трябва да бъде проверено в Cloudflare конфигурацията. Външни сайтове, отворени от връзка, имат собствени практики.</p>
+          <h3>5. Доставчици и получатели</h3>
+          <p>Cloudflare предоставя Pages, DNS, проксиране и Tunnel функции и получава мрежови данни, нужни за тези услуги. Anineko използва AniList за публични метаданни. Кодът съдържа видео адаптери за Anikoto, AllAnime, 9anime, ReAnime, PlayTube и Telegram, както и допълнителни доставчици през Consumet/Cloudflare Worker. Индексирането на субтитри включва OpenSubtitles, Subsunacs, Subs.sab.bz, AniMa BG Fansubs и Anime Subtitle Archival. Кои източници са активни зависи от конфигурацията. Заявки за търсене и видео могат да бъдат препратени от бекенда към съответния външен доставчик, който може да получи технически данни за заявката.</p>
+          <p>Не въвеждайте лични данни в полето за търсене: заявките могат да бъдат изпратени към външни доставчици за търсене.</p>
+          <p>При включен преводачески worker изходен файл със субтитри може да бъде изпратен към конфигурирана Kaggle GPU сесия за превод и резултатът да бъде върнат към Anineko. Потвърдете кои доставчици и договорни условия са активни. Не открихме в клиентския код рекламна аналитика или продажба на лични данни.</p>
+          <p>При автоматичен превод системата може да изпрати текст на субтитри към външен преводачески доставчик от конфигурирания списък: TranslateSubtitles, Translate-Subtitles.com, SyedGakbar или Editsub. Доставчикът обработва изпратения текст според собствените си условия и политика. Използваните доставчици и настройките трябва да бъдат проверени преди всяка промяна на тази политика.</p>
+          <p>Доставчиците могат да обработват данни в различни държави. Точните местоположения, роли на администратор/обработващ и приложими механизми за международен трансфер трябва да бъдат потвърдени от оператора и договорите му.</p>
+          <h3>6. Срокове за съхранение</h3>
+          <p>Предпочитанията в браузъра остават, докато ги изтриете или изчистите данните на сайта. Хешираните ключове за ограничаване на заявките са временни в паметта и се изчистват при неактивност; самата настройка е ограничена по капацитет. Заявките за контакт се пазят колкото е необходимо за отговор и последващо обработване. Кодът не установява точен срок за имейл кореспонденция, системния журнал на Pi или логовете на Cloudflare. Администраторът трябва да определи и публикува тези срокове и да провери конфигурацията на journald и Cloudflare.</p>
+          <h3>7. Вашите права</h3>
+          <p>При условията на GDPR можете да поискате достъп, коригиране, изтриване, ограничаване или възражение срещу обработване, както и преносимост, когато тя е приложима. Когато обработването се основава на съгласие, можете да го оттеглите занапред. Изпратете ясно искане на <a href="mailto:legal@anineko.eu">legal@anineko.eu</a>. Може да поискаме разумна информация за потвърждаване на самоличността, ако е необходимо. Ще отговорим в сроковете по GDPR; обичайният срок е един месец, като при предвидените условия може да бъде удължен.</p>
+          <p>Можете да подадете жалба до <a href="https://cpdp.bg/" target="_blank" rel="noopener noreferrer">Комисията за защита на личните данни (КЗЛД)</a>, българския надзорен орган.</p>
+          <h3>8. Промени и въпроси</h3>
+          <p>Ще обновим тази страница при съществена промяна в обработването. За въпроси или искания относно личните данни: <a href="mailto:legal@anineko.eu">legal@anineko.eu</a>.</p>
+        </section>
+        <section lang="en">
+          <h2>English</h2>
+          <h3>1. Who processes data</h3>
+          <p>The project is called Anineko. For privacy requests, email <a href="mailto:legal@anineko.eu">legal@anineko.eu</a>. The administrator must confirm the legal name and postal address of the person or entity that determines the purposes and means of processing.</p>
+          <h3>2. Data processed</h3>
+          <ul>
+            <li><strong>Technical request data:</strong> Cloudflare and the infrastructure carrying traffic may process IP addresses and technical information such as browser, time, route and response status. The Pages Function signs a client IP value when forwarding it to the backend for rate limiting. The backend uses a hashed identity in a short-lived in-memory limiter; the application does not store a raw IP address as a catalogue user profile.</li>
+            <li><strong>Player preferences:</strong> settings such as quality and subtitle display are stored in your browser’s <code>localStorage</code>, associated with an anime. They are not synced to an account; the public site has no user profiles.</li>
+            <li><strong>Administrative access:</strong> if an administrator enters a token on an admin page, the page may store it in <code>sessionStorage</code> until the tab session ends. These pages are not a normal visitor feature. Do not send an admin token by email.</li>
+            <li><strong>Email:</strong> if you contact us, we process the address, name and content you choose to provide so we can reply and handle the request.</li>
+          </ul>
+          <h3>3. Purposes and legal bases</h3>
+          <p>Technical data is used to deliver pages and APIs, limit abuse, secure the service and diagnose failures. The provisional legal basis to be confirmed by the operator is legitimate interest in operating a secure and functional service. Email is used to respond to communication you initiated and handle your request; the applicable legal basis depends on the request and must be confirmed by the operator. Data may also be processed where necessary to meet a legal obligation.</p>
+          <h3>4. Cookies and tracking</h3>
+          <p>No analytics tracker, advertising network or application code that sets cookies was found in the repository. The player uses local storage for preferences. Cloudflare may use technical cookies or similar measures for security and delivery depending on active configuration; this must be checked in the Cloudflare account. External sites opened from links have their own practices.</p>
+          <h3>5. Providers and recipients</h3>
+          <p>Cloudflare provides Pages, DNS, proxy and Tunnel functions and receives network data needed to provide them. Anineko uses AniList for public metadata. The code contains video adapters for Anikoto, AllAnime, 9anime, ReAnime, PlayTube and Telegram, with additional sources through Consumet/Cloudflare Worker. Subtitle indexing includes OpenSubtitles, Subsunacs, Subs.sab.bz, AniMa BG Fansubs and Anime Subtitle Archival. Which sources are active depends on configuration. Search and video requests may be relayed by the backend to the relevant external provider, which may receive technical details about the request.</p>
+          <p>Do not enter personal details in the search box: search queries may be sent to external search providers.</p>
+          <p>When a translation worker is enabled, a source subtitle file may be sent to a configured Kaggle GPU session for translation, with the result returned to Anineko. The administrator must confirm which providers and contractual terms are active. No advertising analytics or sale of personal data was found in the client code.</p>
+          <p>When automatic translation runs, subtitle text may be sent to an external translation provider in the configured chain: TranslateSubtitles, Translate-Subtitles.com, SyedGakbar or Editsub. The provider processes the submitted text under its own terms and privacy policy. The administrator must verify the active providers and settings before changing this notice.</p>
+          <p>Providers may process data in different countries. Exact locations, controller/processor roles and applicable international-transfer mechanisms must be confirmed by the operator and its contracts.</p>
+          <h3>6. Retention</h3>
+          <p>Browser preferences remain until you clear them or clear site data. Hashed rate-limit keys are temporary in-memory entries and are removed after inactivity; the limiter is capacity-bounded. Contact messages are kept as needed to respond and follow up. The code does not establish exact retention periods for email correspondence, the Pi system journal or Cloudflare logs. The administrator must set and publish these periods and check journald and Cloudflare configuration.</p>
+          <h3>7. Your rights</h3>
+          <p>Subject to the GDPR, you may request access, correction, deletion, restriction or object to processing, and request portability where applicable. Where processing is based on consent, you may withdraw it for the future. Send a clear request to <a href="mailto:legal@anineko.eu">legal@anineko.eu</a>. We may request reasonable information to verify identity where necessary. We will respond within GDPR time limits; the usual period is one month, which may be extended in the circumstances allowed by the Regulation.</p>
+          <p>You may complain to the <a href="https://cpdp.bg/en/" target="_blank" rel="noopener noreferrer">Bulgarian Commission for Personal Data Protection</a>, the Bulgarian supervisory authority.</p>
+          <h3>8. Changes and contact</h3>
+          <p>We will update this page if our processing materially changes. For questions or personal-data requests, email <a href="mailto:legal@anineko.eu">legal@anineko.eu</a>.</p>
+        </section>
+      </div>
+    </main>
+    <SiteFooter/>
+  </body>
+</html>

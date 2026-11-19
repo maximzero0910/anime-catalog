@@ -1,6 +1,7 @@
 ---
 import '../../styles/global.css';
 import Brand from '../../components/Brand.astro';
+import SiteFooter from '../../components/SiteFooter.astro';
 ---
 <html lang="bg"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="icon" href="/anineko-mark.svg" type="image/svg+xml"/><meta name="robots" content="noindex,nofollow"/><title>Telegram — Anineko</title></head><body>
 <header class="site-header"><div class="shell header-row"><Brand /><nav class="site-nav"><a href="/">Каталог</a><a href="/admin/subtitles">Субтитри</a></nav></div></header>
@@ -30,4 +31,4 @@ document.querySelector('#sync')!.addEventListener('click',async()=>{try{await ca
 document.querySelector('#rows')!.addEventListener('click',async event=>{const target=(event.target as HTMLElement).closest<HTMLButtonElement>('button');if(!target)return;try{if(target.dataset.associate){const row=target.closest('tr')!;await call({action:'associate',channelId:target.dataset.channel,messageId:Number(target.dataset.associate),animeId:Number(row.querySelector<HTMLSelectElement>('[data-anime]')!.value),episode:Number(row.querySelector<HTMLInputElement>('[data-episode]')!.value),season:row.querySelector<HTMLInputElement>('[data-season]')!.value||null});note('Асоциацията е потвърдена.');}else if(target.dataset.reject){await call({action:'reject',channelId:target.dataset.channel,messageId:Number(target.dataset.reject)});note('Кандидатът е отхвърлен.');}await refresh();}catch(error){note(error instanceof Error?error.message:String(error));}});
 document.querySelector('#save-alias')!.addEventListener('click',async()=>{try{await call({action:'alias',animeId:Number(document.querySelector<HTMLSelectElement>('#alias-anime')!.value),alias:document.querySelector<HTMLInputElement>('#alias')!.value});note('Алтернативното име е запазено; повторната обработка става при следваща синхронизация.');await refresh();}catch(error){note(error instanceof Error?error.message:String(error));}});
 void refresh();window.setInterval(()=>void refresh(),8000);
-</script></body></html>
+</script><SiteFooter/></body></html>

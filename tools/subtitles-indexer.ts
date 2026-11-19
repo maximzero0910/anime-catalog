@@ -89,17 +89,12 @@ async function processJob(job: Record<string, unknown>): Promise<void> {
   const request = makeRequest(Number(animeId), episode, job);
   if (!request) { finishSubtitleIndexJob(jobId, 'Anime is absent from the local catalogue'); return; }
   registerAnimeAliases(request.animeId, [request.title, ...(request.aliases ?? [])]);
-  if (indexedSubtitleRows(request.animeId, episode).some(row => Number(row.quality_score) >= 0.85)) {
-    finishSubtitleIndexJob(jobId);
-    return;
-  }
   const providers = subtitleIndexProviders;
   let found = 0; let hadError = false;
   for (const provider of providers) {
     // Unconfigured providers are unavailable, not evidence that this episode lacks subtitles.
     if (!provider.isEnabled()) continue;
     const existingRows = indexedSubtitleRows(request.animeId, episode);
-    if (existingRows.some(row => Number(row.quality_score) >= 0.85)) break;
     if (provider.id !== 'anima-bg-fansubs' && provider.id !== 'anime-subtitle-archival' && providerMissActive(request.animeId, episode, provider.id)) continue;
     try {
       const indexedProviderIds = new Set(existingRows.filter(row => row.provider === provider.id).map(row => String(row.provider_id)));

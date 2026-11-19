@@ -32,7 +32,7 @@ Subtitle and Telegram admin writes require bearer tokens when configured and oth
 
 ### Medium: unbounded/large workloads
 
-The HLS route buffers manifest text, Telegram streams use backpressure, and several metadata caches are process-local Maps without size limits. Search/provider fan-out and subtitle worker concurrency need explicit caps. The subtitle worker can run local inference in code/config despite the recent operational preference for remote services; disable that path for the production profile unless deliberately enabled.
+The HLS route buffers manifest text, Telegram streams use backpressure, and several metadata caches are process-local Maps without size limits. Search/provider fan-out and subtitle worker concurrency need explicit caps. Local inference code and configuration have since been removed; subtitle translation is restricted to the four completed online adapters.
 
 ## Existing controls observed
 

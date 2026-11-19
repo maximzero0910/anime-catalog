@@ -1,8 +1,8 @@
 # Subtitle translation providers
 
-`SUBTITLE_PROVIDERS` configures the online adapters in preference order. The worker uses online providers only; local inference is not part of the translation or fallback path.
+`SUBTITLE_PROVIDERS` configures the completed online adapters in preference order. Unknown values, including stale `local` settings, are discarded; an empty supported list falls back to all four completed providers.
 
-Default order, based on single-fixture response times: `syedgakbar,translatesubtitles-co,translate-subtitles-com,editsub,subtitlestranslator`.
+Default order, based on single-fixture response times: `syedgakbar,translatesubtitles-co,translate-subtitles-com,editsub`.
 
 | Setting | Default | Purpose |
 |---|---:|---|
@@ -15,4 +15,4 @@ Default order, based on single-fixture response times: `syedgakbar,translatesubt
 | `SUBTITLE_PROVIDER_WINDOW_MS` | 4000 | Per-provider token bucket window |
 | `SUBTITLE_GOOGLE_WIDGET_API_KEY` | public widget key | Override for the public Google widget key used by three adapters |
 
-`subtitlestranslator.com` remains registered but disabled because its real UI probe reached 100% without returning translated text. `translatesubtitles.co`, `translate-subtitles.com`, and the SyedGakbar tool all use Google's embedded widget, so they are separate page adapters rather than independent translation engines. `editsub.com` uses its own observed HTTP endpoint.
+Only those four adapters are registered. `subtitlestranslator.com` was removed after its real UI probe stalled at 100% without returning translated text. `translatesubtitles.co`, `translate-subtitles.com`, and the SyedGakbar tool all use Google's embedded widget, so they are separate page adapters rather than independent translation engines. `editsub.com` uses its own observed HTTP endpoint.

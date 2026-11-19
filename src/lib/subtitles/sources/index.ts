@@ -3,9 +3,12 @@ import { extractChannelVideos, BASE as PLAYTUBE_BASE, CHANNEL as PLAYTUBE_CHANNE
 import { crawlAniMaCatalog, providerForSubtitleIndex, type SubtitleAnimeIds, type SubtitleCandidate } from '../index-providers';
 import { scoreTitleMatch } from '../match';
 import { subtitleTitleAliases, queueNeedsMapping } from '../storage';
+import { searchProviderCaptions, type ProviderCaptionTitles } from './provider-captions';
+
+export type LegacySourceId = 'playtube' | 'anima-pr' | 'subsunacs';
 
 export interface Candidate {
-  sourceId: 'playtube' | 'anima-pr' | 'subsunacs';
+  sourceId: string;
   title: string;
   episode: number;
   url: string;
@@ -22,7 +25,7 @@ async function polite<T>(host: string, task: () => Promise<T>): Promise<T> {
   if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
   try { return await task(); } finally { hostLastRequest.set(host, Date.now()); }
 }
-export async function searchTitles(sourceId: Candidate['sourceId'], query: string, animeId: number, episode: number, titles: { romaji: string; english: string; native: string; synonyms: string[] }): Promise<Candidate[]> {
+export async function searchTitles(sourceId: LegacySourceId, query: string, animeId: number, episode: number, titles: { romaji: string; english: string; native: string; synonyms: string[] }): Promise<Candidate[]> {
   const aliasRows = subtitleTitleAliases(animeId, sourceId);
   const knownAliases = aliasRows.map(row => row.source_title);
   const score = (title: string) => scoreTitleMatch(titles, title, knownAliases);
@@ -85,4 +88,5 @@ export const subtitleSources = {
   playtube: { id: 'playtube', searchTitles: (query: string, animeId: number, episode: number, titles: { romaji: string; english: string; native: string; synonyms: string[] }) => searchTitles('playtube', query, animeId, episode, titles), episodeUrl },
   'anima-pr': { id: 'anima-pr', searchTitles: (query: string, animeId: number, episode: number, titles: { romaji: string; english: string; native: string; synonyms: string[] }) => searchTitles('anima-pr', query, animeId, episode, titles), episodeUrl },
   subsunacs: { id: 'subsunacs', searchTitles: (query: string, animeId: number, episode: number, titles: { romaji: string; english: string; native: string; synonyms: string[] }) => searchTitles('subsunacs', query, animeId, episode, titles), episodeUrl },
+  'provider-captions': { id: 'provider-captions', searchTitles: (query: string, animeId: number, episode: number, titles: ProviderCaptionTitles, aliases: string[] = []) => searchProviderCaptions(query, animeId, episode, titles, aliases) },
 } as const;
