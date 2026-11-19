@@ -10,3 +10,4 @@ dist/
 data/catalog.db-*
 data/subtitles/
 git-diagnostics-*.zip
+data/catalog.db
