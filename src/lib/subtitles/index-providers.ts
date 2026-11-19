@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
+import { BoundedTtlCache } from '../bounded-cache';
+import { createHostGateRegistry } from '../host-gates';
 import { httpGet, httpPost, UA } from '../providers/types';
+import { fetchPublic } from '../hls-proxy';
 import { indexerHttpCache, saveIndexerHttpCache, type SubtitleIndexInput } from './storage';
 
 export interface SubtitleAnimeIds {
@@ -24,18 +27,26 @@ export interface SubtitleCandidate extends SubtitleIndexInput {
 export interface DownloadedSubtitle { body: string; format: 'srt' | 'ass' | 'ssa' | 'vtt'; language: string; }
 export interface SubtitleIndexProvider {
   readonly id: string;
+  isEnabled(): boolean;
   search(animeIds: SubtitleAnimeIds, season: number | null, episode: number): Promise<SubtitleCandidate[]>;
   fetch(indexRow: SubtitleCandidate): Promise<DownloadedSubtitle>;
 }
 
 type TextResult = { status: number; text: string; headers: Headers; finalUrl: string };
 type ByteResult = { status: number; bytes: Uint8Array; headers: Headers; finalUrl: string };
-type Slot = { active: number; waiting: Array<() => void> };
-const hostSlots = new Map<string, Slot>();
 // DECISION: serialize forum archives and keep API/feed hosts narrowly capped to protect public services during overnight indexing.
 const hostCaps: Record<string, number> = { 'subsunacs.net': 1, 'subs.sab.bz': 1, 'api.opensubtitles.com': 2, 'anima-pr.blogspot.com': 1, 'api.github.com': 2, 'raw.githubusercontent.com': 3 };
+const hostGateRegistry = createHostGateRegistry({ caps: hostCaps, defaultActive: 3, maxHosts: 32, waitersPerSlot: 8, waitMs: 15_000 });
+const subtitleDownloadHosts: Record<string, string[]> = {
+  opensubtitles: ['dl.opensubtitles.com'],
+  subsunacs: ['subsunacs.net', 'www.subsunacs.net'],
+  subssabbz: ['subs.sab.bz'],
+  'anime-subtitle-archival': ['raw.githubusercontent.com'],
+};
+const MAX_SUBTITLE_DOWNLOAD_BYTES = 32 * 1024 * 1024;
 const sabCookies = new Map<string, string>();
-const openSeasonCache = new Map<string, Promise<OpenSubtitlesRecord[]>>();
+const openSeasonCache = new BoundedTtlCache<string, Promise<OpenSubtitlesRecord[]>>(128);
+const OPEN_SUBTITLE_SEASON_CACHE_TTL_MS = 15 * 60_000;
 let animeArchiveRows: SubtitleCandidate[] | undefined;
 let animeArchiveBranch = 'main';
 let animeArchiveByAniDb = new Map<string, SubtitleCandidate[]>();
@@ -52,14 +63,7 @@ export function normalizeSubtitleTitle(value: string): string {
 }
 
 async function withHostSlot<T>(url: string, task: () => Promise<T>): Promise<T> {
-  const hostname = new URL(url).hostname.toLowerCase();
-  const cap = hostCaps[hostname] ?? 3;
-  let slot = hostSlots.get(hostname);
-  if (!slot) { slot = { active: 0, waiting: [] }; hostSlots.set(hostname, slot); }
-  if (slot.active >= cap) await new Promise<void>(resolve => slot!.waiting.push(resolve));
-  slot.active++;
-  try { return await task(); }
-  finally { slot.active--; slot.waiting.shift()?.(); }
+  return hostGateRegistry.run(url, task);
 }
 
 function retryDelay(response: { headers: Headers }, attempt: number): number {
@@ -102,19 +106,30 @@ function rememberProviderCookies(url: string, headers: Headers): void {
   sabCookies.set(hostname, [...jar].map(([name, value]) => `${name}=${value}`).join('; '));
 }
 
-async function requestText(url: string, options: { provider: string; method?: 'GET' | 'POST'; body?: string; headers?: Record<string, string>; referer?: string; timeoutMs?: number; cache?: boolean; json?: boolean; allowStatuses?: number[]; retry403?: boolean } ): Promise<TextResult> {
+export async function requestText(url: string, options: { provider: string; method?: 'GET' | 'POST'; body?: string; headers?: Record<string, string>; referer?: string; timeoutMs?: number; cache?: boolean; json?: boolean; allowStatuses?: number[]; retry403?: boolean }, get: typeof httpGet = httpGet): Promise<TextResult> {
   const method = options.method ?? 'GET';
   const key = cacheKey(method, url, options.body ?? '');
   const cached = options.cache ? indexerHttpCache(key) : undefined;
-  const headers = { ...(options.headers ?? {}), ...(cached?.etag ? { 'If-None-Match': cached.etag } : {}), ...(cached?.lastModified ? { 'If-Modified-Since': cached.lastModified } : {}) };
+  const conditionalHeaders = { ...(options.headers ?? {}), ...(cached?.etag ? { 'If-None-Match': cached.etag } : {}), ...(cached?.lastModified ? { 'If-Modified-Since': cached.lastModified } : {}) };
+  let headers = conditionalHeaders;
+  let retriedUnconditionally = false;
   return withHostSlot(url, async () => {
     const attempts = options.retry403 ? 3 : 4;
     for (let attempt = 0; attempt < attempts; attempt++) {
       const response = method === 'POST'
         ? await httpPost(url, options.body ?? '', { provider: options.provider, headers: { ...(options.json ? { 'content-type': 'application/json' } : {}), ...headersForProvider(url, headers) }, referer: options.referer, timeoutMs: options.timeoutMs ?? 15000, retries: 0, returnHttpErrors: true, returnBlockedResponse: options.retry403 })
-        : await httpGet(url, { provider: options.provider, headers: headersForProvider(url, headers), referer: options.referer, timeoutMs: options.timeoutMs ?? 15000, retries: 0, returnHttpErrors: true, returnBlockedResponse: options.retry403 });
+        : await get(url, { provider: options.provider, headers: headersForProvider(url, headers), referer: options.referer, timeoutMs: options.timeoutMs ?? 15000, retries: 0, returnHttpErrors: true, returnBlockedResponse: options.retry403 });
       rememberProviderCookies(url, response.headers);
-      if (response.status === 304 && cached?.body != null) return { ...response, status: cached.status ?? 200, text: cached.body };
+      if (response.status === 304) {
+        if (cached?.body != null) return { ...response, status: cached.status ?? 200, text: cached.body };
+        // Large cached feeds may retain validators without retaining a body. A 304 is unusable
+        // in that case, so make one bounded unconditional request instead of treating it as empty.
+        if (!retriedUnconditionally) {
+          retriedUnconditionally = true;
+          headers = options.headers ?? {};
+          continue;
+        }
+      }
       if (response.status === 403 && options.retry403) {
         if (attempt + 1 >= attempts) throw new Error(`${options.provider} returned HTTP 403 after ${attempts} browser-header attempts`);
         await new Promise(resolve => setTimeout(resolve, 10_000));
@@ -134,10 +149,25 @@ async function requestText(url: string, options: { provider: string; method?: 'G
 }
 
 async function requestBytes(url: string, options: { provider: string; headers?: Record<string, string>; referer?: string; timeoutMs?: number; retry403?: boolean }): Promise<ByteResult> {
+  const allowedHosts = subtitleDownloadHosts[options.provider];
+  if (!allowedHosts) throw new Error(`${options.provider} is not permitted to fetch subtitle files`);
   return withHostSlot(url, async () => {
     for (let attempt = 0; attempt < 4; attempt++) {
-      const response = await httpGet(url, { provider: options.provider, headers: headersForProvider(url, options.headers), referer: options.referer, timeoutMs: options.timeoutMs ?? 30000, retries: 0, returnHttpErrors: true, returnBlockedResponse: options.retry403, responseType: 'bytes' });
-      rememberProviderCookies(url, response.headers);
+      const headers = headersForProvider(url, options.headers);
+      const response = await fetchPublic(new URL(url), {
+        method: 'GET',
+        headers: { ...headers, ...(options.referer ? { referer: options.referer } : {}) },
+      }, allowedHosts, new AbortController().signal, {
+        requestTimeoutMs: options.timeoutMs ?? 30000,
+        totalTimeoutMs: options.timeoutMs ?? 30000,
+        maxResponseBytes: MAX_SUBTITLE_DOWNLOAD_BYTES,
+        maxActive: 8,
+        maxWaiting: 16,
+        allowHttpHosts: options.provider === 'subssabbz' ? ['subs.sab.bz'] : [],
+      });
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      const finalUrl = response.url || url;
+      rememberProviderCookies(finalUrl, response.headers);
       if (response.status === 403 && options.retry403) {
         if (attempt + 1 >= 3) throw new Error(`${options.provider} returned HTTP 403 after 3 browser-header attempts`);
         await new Promise(resolve => setTimeout(resolve, 10_000));
@@ -149,7 +179,7 @@ async function requestBytes(url: string, options: { provider: string; headers?: 
         continue;
       }
       if (response.status < 200 || response.status >= 300) throw new Error(`${options.provider} returned HTTP ${response.status}`);
-      return { status: response.status, bytes: response.bytes ?? new Uint8Array(), headers: response.headers, finalUrl: response.finalUrl };
+      return { status: response.status, bytes, headers: response.headers, finalUrl };
     }
     throw new Error(`${options.provider} download retry ceiling reached`);
   });
@@ -184,20 +214,39 @@ function contentTypeFormat(bytes: Uint8Array, fileName: string, contentType = ''
 }
 
 interface ZipEntry { name: string; bytes: Uint8Array; }
-function zipSubtitleEntries(archive: Uint8Array): ZipEntry[] {
+const MAX_ARCHIVE_ENTRIES = 500;
+const MAX_ARCHIVE_ENTRY_BYTES = 8 * 1024 * 1024;
+const MAX_ARCHIVE_EXPANDED_BYTES = 32 * 1024 * 1024;
+export function zipSubtitleEntries(archive: Uint8Array): ZipEntry[] {
   const data = Buffer.from(archive);
   let end = -1;
   for (let i = Math.max(0, data.length - 65557); i <= data.length - 22; i++) if (data.readUInt32LE(i) === 0x06054b50) end = i;
   if (end < 0) return [];
-  const count = data.readUInt16LE(end + 10); let offset = data.readUInt32LE(end + 16); const entries: ZipEntry[] = [];
+  const count = data.readUInt16LE(end + 10);
+  if (count > MAX_ARCHIVE_ENTRIES) throw new Error(`Subtitle archive exceeds ${MAX_ARCHIVE_ENTRIES} entries`);
+  let offset = data.readUInt32LE(end + 16); const entries: ZipEntry[] = [];
+  let expandedBytes = 0;
   for (let i = 0; i < count && offset + 46 <= data.length; i++) {
     if (data.readUInt32LE(offset) !== 0x02014b50) break;
-    const method = data.readUInt16LE(offset + 10); const compressedSize = data.readUInt32LE(offset + 20);
+    const method = data.readUInt16LE(offset + 10); const compressedSize = data.readUInt32LE(offset + 20); const declaredSize = data.readUInt32LE(offset + 24);
     const nameLength = data.readUInt16LE(offset + 28); const extraLength = data.readUInt16LE(offset + 30); const commentLength = data.readUInt16LE(offset + 32); const localOffset = data.readUInt32LE(offset + 42);
     const name = data.subarray(offset + 46, offset + 46 + nameLength).toString('utf8');
     if (localOffset + 30 <= data.length && data.readUInt32LE(localOffset) === 0x04034b50 && /\.(srt|ass|ssa|vtt)$/i.test(name)) {
       const localName = data.readUInt16LE(localOffset + 26); const localExtra = data.readUInt16LE(localOffset + 28); const start = localOffset + 30 + localName + localExtra; const compressed = data.subarray(start, start + compressedSize);
-      try { entries.push({ name, bytes: method === 0 ? new Uint8Array(compressed) : method === 8 ? new Uint8Array(inflateRawSync(compressed)) : new Uint8Array() }); } catch { /* A corrupt archive member is ignored while intact files remain usable. */ }
+      if (start + compressedSize > data.length || (method !== 0 && method !== 8)) {
+        offset += 46 + nameLength + extraLength + commentLength;
+        continue;
+      }
+      if (declaredSize > MAX_ARCHIVE_ENTRY_BYTES || expandedBytes + declaredSize > MAX_ARCHIVE_EXPANDED_BYTES) throw new Error('Subtitle archive exceeds its decompressed-size limit');
+      try {
+        const bytes = method === 0 ? new Uint8Array(compressed) : new Uint8Array(inflateRawSync(compressed, { maxOutputLength: MAX_ARCHIVE_ENTRY_BYTES }));
+        if (bytes.byteLength > MAX_ARCHIVE_ENTRY_BYTES || expandedBytes + bytes.byteLength > MAX_ARCHIVE_EXPANDED_BYTES) throw new Error('Subtitle archive exceeds its decompressed-size limit');
+        expandedBytes += bytes.byteLength;
+        entries.push({ name, bytes });
+      } catch (error) {
+        if (error instanceof Error && /decompressed-size limit|ERR_BUFFER_TOO_LARGE/.test(`${error.message} ${(error as NodeJS.ErrnoException).code ?? ''}`)) throw new Error('Subtitle archive exceeds its decompressed-size limit');
+        /* A corrupt archive member is ignored while intact files remain usable. */
+      }
     }
     offset += 46 + nameLength + extraLength + commentLength;
   }
@@ -227,6 +276,7 @@ function isTitleMatch(context: SubtitleAnimeIds, candidate: string): boolean {
 
 abstract class BaseProvider implements SubtitleIndexProvider {
   abstract readonly id: string;
+  isEnabled(): boolean { return true; }
   abstract search(animeIds: SubtitleAnimeIds, season: number | null, episode: number): Promise<SubtitleCandidate[]>;
   abstract fetch(indexRow: SubtitleCandidate): Promise<DownloadedSubtitle>;
   protected candidate(context: SubtitleAnimeIds, row: Omit<SubtitleCandidate, 'animeId' | 'anidbId' | 'imdbId' | 'episodeNumber' | 'language' | 'provider' | 'providerId' | 'qualityScore'> & { episodeNumber?: number; language: string; providerId: string }): SubtitleCandidate {
@@ -239,13 +289,15 @@ export class OpenSubtitlesProvider extends BaseProvider {
   private apiKey: string;
   private appUserAgent: string;
   constructor(private readonly request: typeof requestText = requestText, apiKey = process.env.OPEN_SUBTITLES_API_KEY ?? '', appUserAgent = `Anineko v${process.env.npm_package_version ?? '1.0.0'}`) { super(); this.apiKey = apiKey; this.appUserAgent = appUserAgent; }
+  isEnabled(): boolean { return this.apiKey.length > 0; }
   async search(animeIds: SubtitleAnimeIds, season: number | null, episode: number): Promise<SubtitleCandidate[]> {
     if (!this.apiKey) return [];
     const key = `${animeIds.animeId}:${animeIds.imdbId ?? ''}:${season ?? ''}:${animeIds.fileHash ?? ''}`;
     let batch = openSeasonCache.get(key);
     if (!batch) {
       batch = this.searchBatch(animeIds, season);
-      openSeasonCache.set(key, batch);
+      openSeasonCache.set(key, batch, OPEN_SUBTITLE_SEASON_CACHE_TTL_MS);
+      void batch.catch(() => openSeasonCache.delete(key, batch));
     }
     const results = await batch;
     return results.filter(row => row.episode == null || row.episode === episode).map(row => this.candidate(animeIds, {

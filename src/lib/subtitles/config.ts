@@ -4,36 +4,36 @@ function integer(name: string, fallback: number, min: number, max: number): numb
   const parsed = Number(process.env[name]);
   return Number.isInteger(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
 }
-function decimal(name: string, fallback: number, min: number, max: number): number {
-  const parsed = Number(process.env[name]);
-  return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
+
+export const completedTranslationProviders = ['syedgakbar', 'translatesubtitles-co', 'translate-subtitles-com', 'editsub'] as const;
+const supportedProviderIds = new Set<string>(completedTranslationProviders);
+export function resolveSubtitleProviderOrder(value = process.env.SUBTITLE_PROVIDERS): string[] {
+  const requested = (value ?? '').split(',').map(id => id.trim()).filter(Boolean);
+  const completed = [...new Set(requested.filter(id => supportedProviderIds.has(id)))];
+  return completed.length ? completed : [...completedTranslationProviders];
 }
 
 // DECISION: online translation is I/O-bound; two jobs match the provider scheduler's global request cap.
 export const subtitleConfig = {
-  inferenceUrl: (process.env.SUBTITLE_INFERENCE_URL ?? '').replace(/\/$/, ''),
-  ollamaUrl: (process.env.OLLAMA_HOST ?? 'http://127.0.0.1:11434').replace(/\/$/, ''),
-  model: process.env.SUBTITLE_MODEL ?? '',
-  fallbackModels: (process.env.SUBTITLE_FALLBACK_MODELS ?? '').split(',').map(value => value.trim()).filter(Boolean),
-  contextWindow: integer('SUBTITLE_CONTEXT_WINDOW', 8192, 2048, 32768),
-  gpuUtilization: decimal('SUBTITLE_GPU_UTILIZATION', 0.70, 0, 1),
+  // DECISION: Kaggle mode lets the Pi discover and persist source tracks while reserving translation claims for authenticated GPU workers.
+  translationMode: process.env.SUBTITLE_TRANSLATION_MODE === 'kaggle' ? 'kaggle' as const : 'online' as const,
   maxConcurrentJobs: integer('SUBTITLE_MAX_CONCURRENT', 2, 1, Math.max(1, cpus().length)),
-  batchSize: integer('SUBTITLE_BATCH_SIZE', 4, 1, 40),
-  maxBatchTokens: integer('SUBTITLE_MAX_BATCH_TOKENS', 3600, 256, 20000),
-  contextOverlap: integer('SUBTITLE_CONTEXT_OVERLAP', 3, 0, 10),
-  temperature: decimal('SUBTITLE_TEMPERATURE', 0.15, 0, 1),
-  timeoutMs: integer('SUBTITLE_TIMEOUT_MS', 600000, 10000, 600000),
   retryCount: integer('SUBTITLE_RETRIES', 2, 0, 5),
-  cpuThreads: integer('SUBTITLE_CPU_THREADS', Math.max(1, Math.min(6, cpus().length)), 1, 32),
-  ramCeiling: decimal('SUBTITLE_RAM_CEILING', 0.85, 0.2, 0.95),
   queueCap: integer('SUBTITLE_QUEUE_CAP', 100, 1, 10000),
   retryDelayMs: integer('SUBTITLE_RETRY_BASE_MS', 10000, 1000, 3600000),
-  staleLockMs: integer('SUBTITLE_STALE_LOCK_MS', 30 * 60_000, 60_000, 24 * 60 * 60_000),
+  // DECISION: keep a small source-discovery reservoir ahead of Kaggle without growing an unbounded queue.
+  queueRefillThreshold: integer('SUBTITLE_QUEUE_REFILL_THRESHOLD', 25, 1, 10000),
+  queueRefillIntervalMs: integer('SUBTITLE_QUEUE_REFILL_INTERVAL_MS', 30_000, 5_000, 3_600_000),
+  // DECISION: workers heartbeat every 15s; a 2m lease detects a dead process promptly while allowing several delayed SQLite writes.
+  staleLockMs: integer('SUBTITLE_STALE_LOCK_MS', 2 * 60_000, 60_000, 24 * 60 * 60_000),
+  indexStaleLockMs: integer('SUBTITLE_INDEX_STALE_LOCK_MS', 2 * 60_000, 60_000, 24 * 60 * 60_000),
+  logRetentionDays: integer('SUBTITLE_LOG_RETENTION_DAYS', 180, 7, 3650),
+  maxLogRows: integer('SUBTITLE_LOG_MAX_ROWS', 100_000, 1000, 1_000_000),
   dataDirectory: process.env.SUBTITLE_DATA_DIR ?? 'data/subtitles',
   targetLanguage: 'bg',
   translationVersion: '3',
-  // DECISION: fixture RTTs ranked the callable adapters SyedGakbar, TranslateSubtitles.co, translate-subtitles.com, then Editsub.
-  providerOrder: (process.env.SUBTITLE_PROVIDERS ?? 'syedgakbar,translatesubtitles-co,translate-subtitles-com,editsub,subtitlestranslator').split(',').map(value => value.trim()).filter(Boolean),
+  // DECISION: unknown and retired providers are filtered so stale env values cannot restore local inference or an unverified adapter.
+  providerOrder: resolveSubtitleProviderOrder(),
   providerTimeoutMs: integer('SUBTITLE_PROVIDER_TIMEOUT_MS', 60_000, 1_000, 60_000),
   providerJobBudgetMs: integer('SUBTITLE_PROVIDER_JOB_BUDGET_MS', 300_000, 1_000, 300_000),
   providerMaxBatchTokens: integer('SUBTITLE_PROVIDER_MAX_BATCH_TOKENS', 2400, 128, 20_000),

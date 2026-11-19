@@ -14,7 +14,7 @@ export interface StreamSource {
   provider: string;
 }
 
-export interface SearchHit { id: string; title: string; year?: number; alt?: string[] }
+export interface SearchHit { id: string; title: string; year?: number; alt?: string[]; image?: string }
 export interface EpisodeRef { num: number; id: string }
 
 export interface Provider {
@@ -36,6 +36,36 @@ export class ProviderError extends Error {
 }
 
 export const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+const MAX_TEXT_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_BINARY_RESPONSE_BYTES = 32 * 1024 * 1024;
+
+async function readBoundedBytes(response: Response, maximum: number, provider: string): Promise<Uint8Array> {
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maximum) {
+    await response.body?.cancel();
+    throw new ProviderError('parse', provider, `${provider}: response exceeds ${maximum} bytes`);
+  }
+  if (!response.body) return new Uint8Array();
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maximum) {
+        await reader.cancel();
+        throw new ProviderError('parse', provider, `${provider}: response exceeds ${maximum} bytes`);
+      }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return bytes;
+}
 
 async function transport(url: string, init: RequestInit, provider: string): Promise<Response> {
   const useImpit = provider === 'animepahe' || new URL(url).hostname.toLowerCase().includes('kwik');
@@ -64,8 +94,18 @@ export async function httpGet(
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await transport(url, { method, headers: { 'user-agent': UA, ...(referer ? { referer } : {}), ...extra }, signal: controller.signal }, provider);
-      const bytes = responseType === 'bytes' ? new Uint8Array(await response.arrayBuffer()) : undefined;
-      const text = bytes ? new TextDecoder().decode(bytes) : await response.text();
+      // HEAD responses describe the selected representation but carry no
+      // representation body. Some CDNs still advertise the media's full
+      // Content-Length (or incorrectly send a body), so never apply the text
+      // response cap or buffer that body during metadata validation.
+      let body: Uint8Array<ArrayBufferLike> = new Uint8Array();
+      if (method === 'HEAD') {
+        await response.body?.cancel().catch(() => undefined);
+      } else {
+        body = await readBoundedBytes(response, responseType === 'bytes' ? MAX_BINARY_RESPONSE_BYTES : MAX_TEXT_RESPONSE_BYTES, provider);
+      }
+      const bytes = responseType === 'bytes' ? body : undefined;
+      const text = new TextDecoder().decode(body);
       if (response.status === 403 && !returnBlockedResponse) throw new ProviderError('blocked', provider, `${provider}: HTTP 403`);
       if (returnHttpErrors && (response.status === 429 || response.status >= 500)) return { status: response.status, text, headers: response.headers, finalUrl: response.url, ...(bytes ? { bytes } : {}) };
       if (response.status === 429 || response.status >= 500) {
@@ -77,7 +117,7 @@ export async function httpGet(
       }
       return { status: response.status, text, headers: response.headers, finalUrl: response.url, ...(bytes ? { bytes } : {}) };
     } catch (error) {
-      if (error instanceof ProviderError && error.kind === 'blocked') throw error;
+      if (error instanceof ProviderError && error.kind !== 'network') throw error;
       if (controller.signal.aborted) throw new ProviderError('timeout', provider, `${provider}: request timed out`);
       lastError = error;
       if (attempt < retries) {
@@ -99,7 +139,7 @@ export async function httpPost(url: string, body: string, options: { headers?: R
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await transport(url, { method: 'POST', body, headers: { 'user-agent': UA, 'content-type': 'application/json', ...(referer ? { referer } : {}), ...extra }, signal: controller.signal }, provider);
-      const text = await response.text();
+      const text = new TextDecoder().decode(await readBoundedBytes(response, MAX_TEXT_RESPONSE_BYTES, provider));
       if (response.status === 403 && !returnBlockedResponse) throw new ProviderError('blocked', provider, `${provider}: HTTP 403`);
       if (returnHttpErrors && (response.status === 429 || response.status >= 500)) return { status: response.status, text, headers: response.headers, finalUrl: response.url };
       if ((response.status === 429 || response.status >= 500) && attempt < retries) {
@@ -108,7 +148,7 @@ export async function httpPost(url: string, body: string, options: { headers?: R
       }
       return { status: response.status, text, headers: response.headers, finalUrl: response.url };
     } catch (error) {
-      if (error instanceof ProviderError && error.kind === 'blocked') throw error;
+      if (error instanceof ProviderError && error.kind !== 'network') throw error;
       if (controller.signal.aborted) throw new ProviderError('timeout', provider, `${provider}: request timed out`);
       lastError = error;
       if (attempt < retries) { await new Promise(resolve => setTimeout(resolve, Math.random() * 250 * (2 ** attempt))); continue; }

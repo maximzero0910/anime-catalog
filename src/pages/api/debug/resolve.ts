@@ -5,10 +5,18 @@ import { animeTitleForms } from '../../../lib/subtitles/match';
 import { resolveSubtitleSource } from '../../../lib/subtitles/acquire';
 import { subtitleOffsets, subtitleTitleAliases } from '../../../lib/subtitles/storage';
 import { resolveProviderEpisode } from '../../../lib/providers/title-resolver';
+import { adminAuthorized, adminTokenConfigured } from '../../../lib/admin-auth';
 
 export const prerender = false;
 
 export async function GET({ request }: { request: Request }): Promise<Response> {
+  if (!adminAuthorized(request, process.env.SUBTITLE_ADMIN_TOKEN)) {
+    const configured = adminTokenConfigured(process.env.SUBTITLE_ADMIN_TOKEN);
+    return Response.json({ error: configured ? 'unauthorized' : 'debug endpoint disabled' }, {
+      status: configured ? 401 : 503,
+      headers: { 'cache-control': 'no-store', ...(configured ? { 'WWW-Authenticate': 'Bearer realm="anineko-admin"' } : {}) },
+    });
+  }
   const url = new URL(request.url); const animeId = Number(url.searchParams.get('animeId')); const episode = Number(url.searchParams.get('episode'));
   if (!Number.isSafeInteger(animeId) || animeId < 1 || !Number.isSafeInteger(episode) || episode < 1) return Response.json({ error: 'animeId and episode must be positive integers' }, { status: 400 });
   const metadata = await getAniListAnime(animeId).catch(() => null); const local = getTitleById(animeId);

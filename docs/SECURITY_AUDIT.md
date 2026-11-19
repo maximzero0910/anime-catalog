@@ -32,7 +32,7 @@ Subtitle and Telegram admin writes require bearer tokens when configured and oth
 
 ### Medium: unbounded/large workloads
 
-The HLS route buffers manifest text, Telegram streams use backpressure, and several metadata caches are process-local Maps without size limits. Search/provider fan-out and subtitle worker concurrency need explicit caps. The subtitle worker can run local inference in code/config despite the recent operational preference for remote services; disable that path for the production profile unless deliberately enabled.
+The HLS route buffers manifest text, Telegram streams use backpressure, and several metadata caches are process-local Maps without size limits. Search/provider fan-out and subtitle worker concurrency need explicit caps. Local inference code and configuration have since been removed; subtitle translation is restricted to the four completed online adapters.
 
 ## Existing controls observed
 
@@ -51,3 +51,11 @@ The HLS route buffers manifest text, Telegram streams use backpressure, and seve
 4. Validate a CSP against real production scripts and provider media origins before enabling it.
 
 Readiness: **NOT READY** until the public proxy exposure and dependency advisories are resolved and Pi deployment controls are verified.
+
+## Superseding dependency status (2026-11-17)
+
+The 2026-11-16 dependency count above is historical. A fresh `npm audit` and `npm audit --omit=dev` on 2026-11-17 report 11 high-severity package-path findings, all cascading from the single `picomatch` GHSA-fc5q-39xc-vjpf advisory (CVE-2026-112366). The lock resolves `picomatch` 4.0.7 and 2.3.2; the advisory currently affects versions through 4.0.7 and lists no patched version. The affected paths include Astro, `@astrojs/node`, Vite, `tinyglobby`, `fdir`, `unstorage`, and `anymatch`. npm's proposed force fix downgrades Astro to 5.3.0; that major-version change was not applied because it would roll back the deployed Astro 7 migration and does not establish a patched `picomatch` version. This finding remains open; deployment verification must not be described as a clean dependency audit or READY security posture.
+
+Primary evidence: [GitHub advisory GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf), which lists affected versions through 4.0.7 and no patched version as of this audit.
+
+The clean production build completed, and a string scan of its generated `dist/server` output found no `picomatch` or `analyzeRepeatedExtglob` code. The Pi launches this generated server entry rather than the Astro CLI. This reduces the apparent request-time exposure but does not clear the audit finding: vulnerable packages remain in the install/build tree, and the upstream fix is still unavailable.

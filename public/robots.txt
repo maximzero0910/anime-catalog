@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /admin/
+Disallow: /watch/
+Disallow: /provider-watch
+Disallow: /provider-anime
+
+Sitemap: https://anineko.eu/sitemap.xml

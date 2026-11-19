@@ -1,8 +1,11 @@
-import { getProvider } from '../../lib/providers';
+import { getProvider, ordered } from '../../lib/providers';
 import { ProviderError } from '../../lib/providers/types';
 import { searchWithMetadata } from '../../lib/providers/anikoto';
+import { searchAcrossProviders } from '../../lib/providers/search';
 import { queryAniList } from '../../lib/anilist';
-import { filterAndSortAnime, type CatalogFilters, type FilterableAnime } from '../../lib/catalog-filters';
+import { filterAndSortAnime, mergeProviderResults, type CatalogFilters, type FilterableAnime } from '../../lib/catalog-filters';
+import { readJsonBody, RequestBodyError } from '../../lib/request-body';
+import { withResourceLimit } from '../../lib/resource-limits';
 
 export const prerender = false;
 
@@ -73,6 +76,27 @@ export async function GET({ request }: { request: Request }): Promise<Response> 
   const url = new URL(request.url);
   const providerId = url.searchParams.get('provider') ?? '';
   const action = url.searchParams.get('action') ?? 'search';
+  if (providerId === 'all' && action === 'search') {
+    const query = url.searchParams.get('q')?.trim().slice(0, 120) ?? '';
+    if (!query) return Response.json({ results: [], providers: [] });
+    const available = ordered();
+    const aggregate = await searchAcrossProviders(query, available, 10_000, (provider, value) =>
+      provider.id === 'anikoto' ? searchWithMetadata(value) : provider.searchByTitle(value),
+    );
+    const results = aggregate.results.map(hit => ({
+      id: hit.id,
+      title: hit.title,
+      providerId: hit.providerId,
+      ...(hit.alt?.length ? { alt: hit.alt } : {}),
+      ...('image' in hit && hit.image ? { image: hit.image } : {}),
+      ...('genres' in hit && hit.genres ? { genres: hit.genres } : {}),
+      ...('format' in hit && hit.format ? { type: hit.format } : {}),
+    }));
+    if (!results.length && aggregate.providers.every(status => status.error)) {
+      return Response.json({ error: 'all-providers-unavailable', providers: aggregate.providers.map(({ providerId: source, error }) => ({ provider: source, error })) }, { status: 502, headers: { 'cache-control': 'no-store' } });
+    }
+    return Response.json({ results, providers: aggregate.providers }, { headers: { 'cache-control': 'private, max-age=30' } });
+  }
   const provider = getProvider(providerId);
   if (!provider || !['search', 'info'].includes(action)) {
     return Response.json({ error: 'unsupported-provider-action', provider: providerId, action }, { status: 400 });
@@ -106,16 +130,16 @@ export async function GET({ request }: { request: Request }): Promise<Response> 
 
 export async function POST({ request }: { request: Request }): Promise<Response> {
   let body: { provider?: string; query?: string; results?: FilterableAnime[]; filters?: CatalogFilters };
-  try { body = await request.json() as typeof body; }
-  catch { return Response.json({ error: 'invalid-json' }, { status: 400 }); }
+  try { body = await readJsonBody<typeof body>(request); }
+  catch (error) { return Response.json({ error: error instanceof Error ? error.message : 'invalid-json' }, { status: error instanceof RequestBodyError ? error.status : 400 }); }
   const provider = body.provider ?? '';
   const query = (body.query ?? '').trim().slice(0, 120);
   const results = Array.isArray(body.results) ? body.results.slice(0, 100) : [];
   if (!provider || !query || !results.length) return Response.json({ results: [], total: 0 });
   try {
-    const metadata = await aniListMatches(query);
+    const metadata = await withResourceLimit('catalog-filter', () => aniListMatches(query), request.signal);
     const enriched = results.map(result => enrichResult(result, metadata));
-    const filtered = filterAndSortAnime(enriched, body.filters ?? {});
+    const filtered = mergeProviderResults(filterAndSortAnime(enriched, body.filters ?? {}));
     return Response.json({ results: filtered, total: filtered.length });
   } catch (error) {
     console.error({ provider, capability: 'catalog-filter', reason: error instanceof Error ? error.message : String(error) });

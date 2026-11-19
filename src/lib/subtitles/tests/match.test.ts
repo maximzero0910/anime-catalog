@@ -18,8 +18,8 @@ test('source alias makes a Bulgarian PlayTube title an exact match for the AniLi
   assert.equal(matchAtLeast85(titles, 'Unrelated anime', [alias]), false);
 });
 
-test('three subtitle-source adapters are separately registered and episode URLs require an episode match', () => {
-  assert.deepEqual(Object.keys(subtitleSources).sort(), ['anima-pr', 'playtube', 'subsunacs']);
+test('subtitle-source adapters are separately registered and episode URLs require an episode match', () => {
+  assert.deepEqual(Object.keys(subtitleSources).sort(), ['anima-pr', 'playtube', 'provider-captions', 'subsunacs']);
   const candidate: Candidate = { sourceId: 'playtube', title: 'Title', episode: 2, url: 'https://playtube.tv/watch/ep-2', kind: 'hardsub', attribution: 'PlayTube' };
   assert.equal(episodeUrl(candidate, 2), candidate.url);
   assert.equal(episodeUrl(candidate, 1), null);

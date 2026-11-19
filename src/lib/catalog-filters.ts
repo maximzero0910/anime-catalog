@@ -31,10 +31,42 @@ export interface FilterableAnime {
   animeType?: string;
   format?: string;
   anilistId?: number;
+  providerId?: string;
+  providerChoices?: Array<{ providerId: string; id: string }>;
 }
 
 function titleOf(item: FilterableAnime): string {
   return typeof item.title === 'string' ? item.title : item.title.english ?? item.title.romaji ?? item.title.native ?? '';
+}
+
+const providerPreference: Record<string, number> = { anikoto: 0, '9anime': 1, telegram: 2, playtube: 3, reanime: 4, allanime: 5 };
+const normalizeTitle = (value: string) => value.normalize('NFKD').replace(/\p{M}/gu, '').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/\s+/g, ' ');
+
+/** Keep one result card per AniList title while retaining each provider's own series ID. */
+export function mergeProviderResults<T extends FilterableAnime>(items: T[]): T[] {
+  const merged = new Map<string, T>();
+  for (const item of items) {
+    const key = item.anilistId ? `anilist:${item.anilistId}` : `title:${normalizeTitle(titleOf(item))}`;
+    const current = merged.get(key);
+    const providerId = item.providerId ?? 'anikoto';
+    const choice = { providerId, id: item.id };
+    if (!current) {
+      merged.set(key, { ...item, providerChoices: [choice] });
+      continue;
+    }
+    const choices = [...(current.providerChoices ?? [{ providerId: current.providerId ?? 'anikoto', id: current.id }]), choice];
+    const uniqueChoices = [...new Map(choices.map(source => [source.providerId, source])).values()];
+    const currentRank = providerPreference[current.providerId ?? 'anikoto'] ?? 99;
+    const nextRank = providerPreference[providerId] ?? 99;
+    const preferred = nextRank < currentRank ? item : current;
+    merged.set(key, {
+      ...current,
+      ...preferred,
+      image: preferred.image ?? current.image ?? item.image,
+      providerChoices: uniqueChoices,
+    });
+  }
+  return [...merged.values()];
 }
 
 function hasFormat(item: FilterableAnime, format: string): boolean {

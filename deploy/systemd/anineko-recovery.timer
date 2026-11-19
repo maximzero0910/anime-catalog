@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically recover failed Anineko services
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+AccuracySec=1min
+Unit=anineko-recovery.service
+
+[Install]
+WantedBy=timers.target

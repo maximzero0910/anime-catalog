@@ -11,9 +11,19 @@ export interface Cue {
   speaker: string | null;
 }
 export interface NormalizedSubtitle { format: SubtitleFormat; cues: Cue[]; header: string; sourceHash: string; }
+const MAX_SUBTITLE_INPUT_BYTES = 8 * 1024 * 1024;
+const MAX_SUBTITLE_CUES = 20_000;
+const MAX_CUE_TEXT_CHARACTERS = 8_192;
+
+function assertCueCapacity(current: number, body: string): void {
+  if (current >= MAX_SUBTITLE_CUES) throw new Error(`Subtitle exceeds ${MAX_SUBTITLE_CUES} cues`);
+  if (body.length > MAX_CUE_TEXT_CHARACTERS) throw new Error(`Subtitle cue exceeds ${MAX_CUE_TEXT_CHARACTERS} characters`);
+}
 
 function parseTime(value: string): number {
   const normalized = value.trim().replace(',', '.');
+  const short = normalized.match(/^(\d{1,2}):(\d{2})\.(\d{1,3})$/);
+  if (short) return ((Number(short[1]) * 60 + Number(short[2])) * 1000) + Number(short[3].padEnd(3, '0'));
   const match = normalized.match(/^(?:(\d+):)?(\d{1,2}):(\d{2})\.(\d{1,3})$/);
   if (!match) throw new Error(`Invalid subtitle timestamp: ${value}`);
   return (((Number(match[1] ?? 0) * 60 + Number(match[2])) * 60 + Number(match[3])) * 1000) + Number(match[4].padEnd(3, '0'));
@@ -36,6 +46,7 @@ function hash(value: string): string { return createHash('sha256').update(value)
 function tagsOf(text: string): string[] { return [...text.matchAll(/\{[^}]*\}/g)].map(match => match[0]); }
 
 export function parseSubtitle(input: string, preferred?: SubtitleFormat): NormalizedSubtitle {
+  if (Buffer.byteLength(input, 'utf8') > MAX_SUBTITLE_INPUT_BYTES) throw new Error(`Subtitle exceeds ${MAX_SUBTITLE_INPUT_BYTES} bytes`);
   const sourceHash = hash(input);
   const text = input.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
   const format = identifyFormat(text, preferred);
@@ -66,6 +77,7 @@ export function parseSubtitle(input: string, preferred?: SubtitleFormat): Normal
       const end = parseTime(values[endIndex] ?? '');
       if (end <= start) continue;
       const dialogue = values[textIndex] ?? '';
+      assertCueCapacity(cues.length, dialogue);
       const speakerIndex = fields.findIndex(field => ['name', 'actor'].includes(field.toLowerCase()));
       const cueFields = [...values];
       cueFields[textIndex] = '';
@@ -82,14 +94,15 @@ export function parseSubtitle(input: string, preferred?: SubtitleFormat): Normal
     const usedIds = new Set<string>();
     for (const block of blocks) {
       const lines = block.split('\n');
-      const timeIndex = lines.findIndex(line => /\d{1,2}:\d{2}:\d{2}[.,]\d{1,3}\s*-->\s*\d{1,2}:\d{2}:\d{2}[.,]\d{1,3}/.test(line));
+      const timeIndex = lines.findIndex(line => /\d{1,2}:\d{2}(?::\d{2})?[.,]\d{1,3}\s*-->\s*\d{1,2}:\d{2}(?::\d{2})?[.,]\d{1,3}/.test(line));
       if (timeIndex < 0) continue;
-      const match = lines[timeIndex]!.match(/(\d{1,2}:\d{2}:\d{2}[.,]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[.,]\d{1,3})/);
+      const match = lines[timeIndex]!.match(/(\d{1,2}:\d{2}(?::\d{2})?[.,]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}(?::\d{2})?[.,]\d{1,3})/);
       if (!match) continue;
       const start = parseTime(match[1]!); const end = parseTime(match[2]!);
       if (end <= start) continue;
       const body = lines.slice(timeIndex + 1).join('\n').trim();
       if (!body) continue;
+      assertCueCapacity(cues.length, body);
       ordinal++;
       const candidateId = format === 'vtt' ? lines[timeIndex - 1]?.trim() : undefined;
       let id = candidateId && candidateId !== 'WEBVTT' && !candidateId.includes('-->')

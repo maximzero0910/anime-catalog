@@ -3,12 +3,106 @@ import { parseProviderHostRules, providerHostAllowed } from '../src/lib/provider
 const MAX_HLS_ACTIVE = 8;
 const MAX_MANIFEST_BYTES = 1_048_576;
 const MAX_SEGMENT_BYTES = 32 * 1_048_576;
+const RESOLVER_TIMEOUT_MS = 15_000;
+const MAX_RESOLVER_RESPONSE_BYTES = 4 * 1_048_576;
 let activeHls = 0;
+
+interface Env { RESOLVER: string; TEST_HLS_URL?: string; TEST_MP4_URL?: string; HLS_ALLOWED_HOSTS?: string; RESOLVER_TIMEOUT_MS?: string; RESOLVER_MAX_JSON_BYTES?: string }
+
+function boundedEnvironmentInteger(value: string | undefined, fallback: number, minimum: number, maximum: number): number {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? Math.max(minimum, Math.min(maximum, parsed)) : fallback;
+}
+
+async function fetchResolverResponse(url: string, clientSignal: AbortSignal, env: Env): Promise<Response> {
+  let resolverUrl: URL;
+  try { resolverUrl = new URL(url); }
+  catch { return new Response('resolver configuration is invalid', { status: 503 }); }
+  if (resolverUrl.protocol !== 'https:' || resolverUrl.username || resolverUrl.password) {
+    return new Response('resolver configuration is invalid', { status: 503 });
+  }
+
+  const timeoutMs = boundedEnvironmentInteger(env.RESOLVER_TIMEOUT_MS, RESOLVER_TIMEOUT_MS, 500, 30_000);
+  const maxBytes = boundedEnvironmentInteger(env.RESOLVER_MAX_JSON_BYTES, MAX_RESOLVER_RESPONSE_BYTES, 1024, 10 * 1_048_576);
+  const signal = AbortSignal.any([clientSignal, AbortSignal.timeout(timeoutMs)]);
+  let response: Response;
+  try {
+    response = await fetch(resolverUrl, {
+      headers: { 'User-Agent': UA, Accept: 'application/json' },
+      redirect: 'manual',
+      signal,
+    });
+  } catch {
+    return new Response(signal.aborted ? 'resolver request timed out or was cancelled' : 'resolver request failed', {
+      status: clientSignal.aborted ? 499 : signal.aborted ? 504 : 502,
+    });
+  }
+
+  if (response.status >= 300 && response.status < 400) {
+    await response.body?.cancel();
+    return new Response('resolver redirects are not followed', { status: 502 });
+  }
+  const declaredLength = Number(response.headers.get('Content-Length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    await response.body?.cancel();
+    return new Response('resolver response too large', { status: 502 });
+  }
+  if (!response.body) return new Response(null, { status: response.status, headers: response.headers });
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel();
+        return new Response('resolver response too large', { status: 502 });
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return new Response(clientSignal.aborted ? 'resolver request cancelled' : signal.aborted ? 'resolver request timed out' : 'resolver response failed', {
+      status: clientSignal.aborted ? 499 : signal.aborted ? 504 : 502,
+    });
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return new Response(bytes, { status: response.status, statusText: response.statusText, headers: response.headers });
+}
 
 function allowedHost(host: string, rules: string[]): boolean {
   const value = host.toLowerCase().replace(/\.$/, '');
   if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value) || value.includes(':')) return false;
   return providerHostAllowed(value, rules);
+}
+
+async function readBoundedResponse(response: Response, maximum: number): Promise<Uint8Array | undefined> {
+  if (!response.body) return new Uint8Array();
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maximum) {
+        await reader.cancel();
+        return undefined;
+      }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return bytes;
 }
 
 async function fetchAllowed(target: URL, ref: string, range: string | null, rules: string[], clientSignal: AbortSignal, method: 'GET' | 'HEAD' = 'GET'): Promise<Response> {
@@ -26,20 +120,30 @@ async function fetchAllowed(target: URL, ref: string, range: string | null, rule
       const response = await fetch(current, { method, headers, redirect: 'manual', signal });
       if ([301, 302, 303, 307, 308].includes(response.status)) {
         const location = response.headers.get('Location');
+        await response.body?.cancel();
         if (!location || hop === 3) return new Response('redirect limit exceeded', { status: 502 });
         try { current = new URL(location, current); } catch { return new Response('invalid redirect URL', { status: 502 }); }
         continue;
+      }
+      if (!response.ok && response.status !== 206) {
+        await response.body?.cancel();
+        return new Response(null, { status: response.status, headers: response.headers });
       }
       const type = response.headers.get('Content-Type') ?? '';
       const manifest = type.toLowerCase().includes('mpegurl') || current.pathname.toLowerCase().endsWith('.m3u8');
       if (method === 'HEAD') return new Response(null, { status: response.status, headers: response.headers });
       const cap = manifest ? MAX_MANIFEST_BYTES : MAX_SEGMENT_BYTES;
       const length = Number(response.headers.get('Content-Length'));
-      if (Number.isFinite(length) && length > cap) return new Response('upstream response too large', { status: 413 });
+      if (Number.isFinite(length) && length > cap) {
+        await response.body?.cancel();
+        return new Response('upstream response too large', { status: 413 });
+      }
       if (manifest) {
-        const bytes = new Uint8Array(await response.arrayBuffer());
-        if (bytes.byteLength > cap) return new Response('upstream response too large', { status: 413 });
-        return new Response(bytes, { status: response.status, headers: response.headers });
+        const bytes = await readBoundedResponse(response, cap);
+        if (!bytes) return new Response('upstream response too large', { status: 413 });
+        const text = new TextDecoder().decode(bytes);
+        if (bytes.byteLength <= 40 || !text.slice(0, 512).includes('#EXTM3U')) return new Response('invalid HLS manifest', { status: 502 });
+        return new Response(bytes as unknown as BodyInit, { status: response.status, headers: response.headers });
       }
       if (!response.body) return response;
       let size = 0;
@@ -145,7 +249,7 @@ export default {
       const upstreamUrl = `${env.RESOLVER}${endpoint}`;
       let upstream: Response;
       try {
-        upstream = await fetch(upstreamUrl, { headers: { 'User-Agent': UA, Accept: 'application/json' } });
+        upstream = await fetchResolverResponse(upstreamUrl, req.signal, env);
       } catch (error) {
         console.error(`[Consumet] provider=${provider} capability=${capability}=broken endpoint=${endpoint} upstream=${safeHost(upstreamUrl)} status=network-error body=${String(error).slice(0, 300)}`);
         return Response.json({ error: 'Consumet API is unreachable', diagnostic: 'Локалният Consumet API не отговаря. Провери дали работи на порт 3000.', provider, endpoint, upstreamStatus: 502 }, { status: 502, headers: { 'Access-Control-Allow-Origin': '*' } });
@@ -192,7 +296,7 @@ export default {
       const upstreamUrl = `${env.RESOLVER}${path}`;
       let resolved: Response;
       try {
-        resolved = await fetch(upstreamUrl, { headers: { 'User-Agent': UA, Accept: 'application/json' } });
+        resolved = await fetchResolverResponse(upstreamUrl, req.signal, env);
       } catch (error) {
         console.error(`[Playback] provider=${provider} capability=SOURCE_WORKING=broken stage=source-extraction endpoint=${path} status=network-error body=${String(error).slice(0, 300)}`);
         return new Response('Consumet stream resolution failed', { status: 502 });
@@ -203,7 +307,9 @@ export default {
         console.error(`[Playback] provider=${provider} capability=SOURCE_WORKING=broken stage=source-extraction endpoint=${path} status=${resolved.status} body=${excerpt}`);
         return new Response('Consumet stream resolution failed', { status: 502 });
       }
-      const data = await resolved.json() as { sources?: Array<{ url: string; isM3U8?: boolean; type?: string; quality?: string; headers?: Record<string, string> }> };
+      let data: { sources?: Array<{ url: string; isM3U8?: boolean; type?: string; quality?: string; headers?: Record<string, string> }> };
+      try { data = await resolved.json() as typeof data; }
+      catch { return new Response('Consumet returned malformed JSON', { status: 502 }); }
       const sources = data.sources ?? [];
       console.info(`[Playback] provider=${provider} capability=SOURCE_WORKING state=${sources.length ? 'working' : 'broken'} stage=source-metadata count=${sources.length} formats=${[...new Set(sources.map(mediaKind))].join(',') || 'none'} headerNames=${[...new Set(sources.flatMap(source => Object.keys(source.headers ?? {})))].join(',') || 'none'}`);
       const isHls = (item: typeof sources[number]) => item.isM3U8 || item.url.toLowerCase().split('?')[0].endsWith('.m3u8') || item.type?.toLowerCase().includes('mpegurl');
@@ -246,8 +352,7 @@ export default {
       const manifest = await fetchAllowed(new URL(source.url), ref, null, rules, req.signal);
       console.info(`[Playback] provider=${provider} stage=media-fetch format=hls host=${safeHost(source.url)} status=${manifest.status} contentType=${manifest.headers.get('Content-Type') ?? 'unknown'} headerNames=${[...headers.keys()].join(',')}`);
       if (!manifest.ok) {
-        const excerpt = (await manifest.clone().text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 300);
-        console.error(`[Playback] provider=${provider} stage=media-fetch format=hls host=${safeHost(source.url)} status=${manifest.status} body=${excerpt}`);
+        console.error(`[Playback] provider=${provider} stage=media-fetch format=hls host=${safeHost(source.url)} status=${manifest.status}`);
         return new Response('manifest fetch failed', { status: 502 });
       }
       const text = await manifest.text();
@@ -271,13 +376,15 @@ export default {
       const upstream = await fetchAllowed(mediaUrl, ref, req.headers.get('Range'), rules, req.signal);
       const type = upstream.headers.get('Content-Type') ?? '';
       if (type.includes('mpegurl') || new URL(target).pathname.endsWith('.m3u8')) {
-        return new Response(rewriteManifest(await upstream.text(), new URL(target), ref), { status: upstream.status, headers: { 'Content-Type': 'application/vnd.apple.mpegurl', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=30' } });
+        if (!upstream.ok) return cors(upstream, type || 'text/plain');
+        const text = await upstream.text();
+        if (new TextEncoder().encode(text).byteLength <= 40 || !text.slice(0, 512).includes('#EXTM3U')) return new Response('invalid HLS manifest', { status: 502 });
+        return new Response(rewriteManifest(text, new URL(target), ref), { status: upstream.status, headers: { 'Content-Type': 'application/vnd.apple.mpegurl', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' } });
       }
+      if (!upstream.ok && upstream.status !== 206) return cors(upstream, type || 'text/plain');
       return cors(upstream, type || 'video/mp2t');
     }
 
     return new Response('not found', { status: 404 });
   },
 };
-
-interface Env { RESOLVER: string; TEST_HLS_URL?: string; TEST_MP4_URL?: string; HLS_ALLOWED_HOSTS?: string }

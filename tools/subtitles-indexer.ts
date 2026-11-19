@@ -1,14 +1,20 @@
 import { getEpisodes, getTitleById, getTitles } from '../src/lib/db';
 import { subtitleMatchScore, indexSubtitleCandidate, registerAnimeAliases } from '../src/lib/subtitles/index';
 import { AniMaBgCatalogProvider, crawlAnimeBgCatalog, subtitleIndexProviders, type SubtitleAnimeIds } from '../src/lib/subtitles/index-providers';
-import { claimSubtitleIndexJobs, enqueueSubtitleIndexJob, finishSubtitleIndexJob, indexedSubtitleRows, listArtifacts, providerMissActive, readBody, recordProviderMiss, recoverStaleSubtitleIndexJobs, storeSubtitleAsset, subtitleIndexStats, upsertSubtitleIndex } from '../src/lib/subtitles/storage';
+import { claimSubtitleIndexJobs, enqueueSubtitleIndexJob, finishSubtitleIndexJob, heartbeatSubtitleIndexJob, indexedSubtitleRows, listArtifacts, providerMissActive, pruneSubtitleOperationalData, readBody, recordProviderMiss, recoverStaleSubtitleIndexJobs, storeSubtitleAsset, subtitleIndexStats, syncSubtitleProviderEnabled, upsertSubtitleIndex } from '../src/lib/subtitles/storage';
+import { startWorkerHeartbeat } from '../src/lib/worker-heartbeat';
+import { indexProviderCandidates } from '../src/lib/subtitles/index-runner';
+import { subtitleConfig } from '../src/lib/subtitles/config';
+import { subtitleIndexerMode } from '../src/lib/subtitles/indexer-mode';
 
-// DECISION: crawl the small title catalog first and process one durable job at a time; provider concurrency caps are enforced per host.
+// DECISION: explicit catalog runs enqueue all episodes; the persistent service uses --queued-only to avoid startup fan-out.
 const watch = process.argv.includes('--watch');
 const seed = process.argv.includes('--seed');
+const indexerMode = subtitleIndexerMode(process.argv.slice(2));
 let stopRequested = false;
 let processedJobs = 0;
 const lastProviderErrorLog = new Map<string, number>();
+const stopApplicationHeartbeat = startWorkerHeartbeat('subtitle-indexer');
 process.on('SIGINT', () => { stopRequested = true; console.log('Index worker will stop after the current job.'); });
 process.on('SIGTERM', () => { stopRequested = true; console.log('Index worker will stop after the current job.'); });
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -67,30 +73,42 @@ function enqueueAllEpisodes(): number {
 
 async function processJob(job: Record<string, unknown>): Promise<void> {
   const animeId = String(job.anime_id); const episode = Number(job.episode_number);
+  const jobId = Number(job.id);
+  let lastHeartbeatErrorLog = 0;
+  const heartbeat = setInterval(() => {
+    try { heartbeatSubtitleIndexJob(jobId); }
+    catch (error) {
+      if (Date.now() - lastHeartbeatErrorLog >= 5 * 60_000) {
+        console.warn(JSON.stringify({ event: 'subtitle_index_lease_refresh_failed', jobId, animeId, episode, reason: error instanceof Error ? error.message : String(error) }));
+        lastHeartbeatErrorLog = Date.now();
+      }
+    }
+  }, 15000);
+  heartbeat.unref();
+  try {
   const request = makeRequest(Number(animeId), episode, job);
-  if (!request) { finishSubtitleIndexJob(Number(job.id), 'Anime is absent from the local catalogue'); return; }
+  if (!request) { finishSubtitleIndexJob(jobId, 'Anime is absent from the local catalogue'); return; }
   registerAnimeAliases(request.animeId, [request.title, ...(request.aliases ?? [])]);
-  if (indexedSubtitleRows(request.animeId, episode).some(row => Number(row.quality_score) >= 0.85)) {
-    finishSubtitleIndexJob(Number(job.id));
-    return;
-  }
   const providers = subtitleIndexProviders;
   let found = 0; let hadError = false;
   for (const provider of providers) {
+    // Unconfigured providers are unavailable, not evidence that this episode lacks subtitles.
+    if (!provider.isEnabled()) continue;
     const existingRows = indexedSubtitleRows(request.animeId, episode);
-    if (existingRows.some(row => Number(row.quality_score) >= 0.85)) break;
-    if (existingRows.some(row => row.provider === provider.id)) continue;
     if (provider.id !== 'anima-bg-fansubs' && provider.id !== 'anime-subtitle-archival' && providerMissActive(request.animeId, episode, provider.id)) continue;
     try {
-      const candidates = await provider.search(request, request.season ?? null, episode);
-      if (!candidates.length) { recordProviderMiss(request.animeId, episode, provider.id); continue; }
-      for (const candidate of candidates) {
-        await indexSubtitleCandidate(provider, request, candidate);
-        found++;
-      }
+      const indexedProviderIds = new Set(existingRows.filter(row => row.provider === provider.id).map(row => String(row.provider_id)));
+      found += await indexProviderCandidates({
+        search: () => provider.search(request, request.season ?? null, episode),
+        recordDefinitiveMiss: () => recordProviderMiss(request.animeId, episode, provider.id),
+        isAlreadyIndexed: candidate => indexedProviderIds.has(candidate.providerId),
+        index: async candidate => {
+          await indexSubtitleCandidate(provider, request, candidate);
+          indexedProviderIds.add(candidate.providerId);
+        },
+      });
     } catch (error) {
       hadError = true;
-      recordProviderMiss(request.animeId, episode, provider.id);
       const lastLogged = lastProviderErrorLog.get(provider.id) ?? 0;
       if (Date.now() - lastLogged > 5 * 60_000) {
         console.error(JSON.stringify({ provider: provider.id, animeId, episode, error: error instanceof Error ? error.message : String(error) }));
@@ -98,14 +116,27 @@ async function processJob(job: Record<string, unknown>): Promise<void> {
       }
     }
   }
-  finishSubtitleIndexJob(Number(job.id), hadError ? `Provider indexing incomplete${found ? `; indexed ${found} candidate(s)` : ''}` : undefined);
+  finishSubtitleIndexJob(jobId, hadError ? `Provider indexing incomplete${found ? `; indexed ${found} candidate(s)` : ''}` : undefined);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    finishSubtitleIndexJob(jobId, reason);
+    console.error(JSON.stringify({ event: 'subtitle_index_job_failed', animeId, episode, reason }));
+  } finally {
+    clearInterval(heartbeat);
+  }
 }
 
 async function run(): Promise<void> {
+  const pruned = pruneSubtitleOperationalData();
+  if (Object.values(pruned).some(count => count > 0)) console.info({ event: 'subtitle_operational_data_pruned', ...pruned });
+  for (const provider of subtitleIndexProviders) {
+    const requeued = syncSubtitleProviderEnabled(provider.id, provider.isEnabled());
+    if (requeued) console.info({ event: 'subtitle_provider_enabled_recovery', provider: provider.id, requeued });
+  }
   if (seed) { await seedCatalog(); await seedValidatedArtifacts(); }
-  const recovered = recoverStaleSubtitleIndexJobs();
-  const queued = enqueueAllEpisodes();
-  console.log(JSON.stringify({ queued, recovered, index: subtitleIndexStats() }));
+  const recovered = recoverStaleSubtitleIndexJobs(subtitleConfig.indexStaleLockMs);
+  const queued = indexerMode === 'catalog' ? enqueueAllEpisodes() : 0;
+  console.log(JSON.stringify({ mode: indexerMode, queued, recovered, index: subtitleIndexStats() }));
   do {
     const jobs = claimSubtitleIndexJobs(1);
     for (const job of jobs) await processJob(job);
@@ -116,4 +147,4 @@ async function run(): Promise<void> {
   } while (true);
 }
 
-void run().catch(error => { console.error(error); process.exitCode = 1; });
+void run().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => stopApplicationHeartbeat());

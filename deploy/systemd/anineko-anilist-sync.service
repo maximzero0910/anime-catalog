@@ -1,0 +1,33 @@
+[Unit]
+Description=Refresh Anineko AniList popularity priorities
+After=network-online.target
+Wants=network-online.target
+ConditionPathIsDirectory=/srv/anineko/releases
+
+[Service]
+Type=oneshot
+User=max
+Group=max
+EnvironmentFile=/srv/anineko/.env
+Environment=CATALOG_DB_PATH=/srv/anineko/data/catalog.db
+Environment=SUBTITLE_DATA_DIR=/srv/anineko/data/subtitles
+ExecStart=/usr/local/libexec/anineko-anilist-sync
+TimeoutStartSec=2min
+Nice=10
+IOSchedulingClass=idle
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/srv/anineko/data
+LimitNOFILE=128

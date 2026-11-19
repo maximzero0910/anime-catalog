@@ -1,25 +1,54 @@
-import { discoverTracks, downloadTrack, resolveSubtitleSource, type SubtitleTrack } from '../src/lib/subtitles/acquire';
+import { discoverTracksDetailed, downloadTrack, firstUsableTrack, resolveSubtitleSourceDetailed, type SubtitleTrack } from '../src/lib/subtitles/acquire';
 import { subtitleConfig } from '../src/lib/subtitles/config';
 import { parseSubtitle } from '../src/lib/subtitles/normalize';
-import { addDeadLetter, claimJobs, claimUndiscoveredJobs, existingBulgarian, getJob, heartbeatJob, logJob, readBody, recordWorkerHeartbeat, recoverStaleJobs, saveBody, saveSubtitleHardsub, setWorkerControl, skipJobForNoSubtitleSource, storeValidatedArtifact, updateJob, workerConcurrency, workerControl, type Job } from '../src/lib/subtitles/storage';
-import { enqueueEligible } from '../src/lib/subtitles/queue';
+import { addDeadLetter, claimJobs, claimUndiscoveredJobs, compareAndSetWorkerControl, existingBulgarian, getJob, heartbeatJob, logJob, pruneSubtitleOperationalData, readBody, recordWorkerHeartbeat, recoverStaleJobs, requeueExpiredSubtitleSources, saveBody, saveSubtitleHardsub, setWorkerControl, skipJobForNoSubtitleSource, storeValidatedArtifact, subtitleQueueDepth, updateJob, workerConcurrency, workerControl, type Job, type WorkerControl } from '../src/lib/subtitles/storage';
+import { enqueueEligible, shouldRefillSubtitleQueue } from '../src/lib/subtitles/queue';
+import { subtitleDiscoveryNeedsRetry } from '../src/lib/subtitles/provider-fallback';
 import { SubtitleWorkerPause, SubtitleWorkerStop, translateSubtitleJob } from '../src/lib/subtitles/translate';
 import { nextProviderAvailableAt } from '../src/lib/subtitles/providers';
+import { startWorkerHeartbeat } from '../src/lib/worker-heartbeat';
 
 const args = process.argv.slice(2);
 const option = (name: string) => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : undefined; };
 const selectedAnime = option('--anime')?.split(',').map(Number).filter(Number.isSafeInteger);
 const cap = Math.min(subtitleConfig.queueCap, Number(option('--cap') || subtitleConfig.queueCap));
 const watch = args.includes('--watch');
+const stopApplicationHeartbeat = startWorkerHeartbeat('subtitle-worker');
 let stopping = false;
 recordWorkerHeartbeat();
 const workerHeartbeat = setInterval(() => recordWorkerHeartbeat(), 10_000);
 workerHeartbeat.unref();
-const setStop = () => { stopping = true; setWorkerControl('stopping'); console.log('Graceful shutdown requested; current batch will checkpoint before exit.'); };
+let controlAtShutdown: WorkerControl | undefined;
+let lastQueueRefillAt = 0;
+const setStop = () => {
+  if (stopping) return;
+  stopping = true;
+  try {
+    controlAtShutdown = workerControl();
+    if (controlAtShutdown === 'running') setWorkerControl('stopping');
+  } catch (error) {
+    console.error({ event: 'subtitle_worker_shutdown_control_failed', reason: error instanceof Error ? error.name : 'unknown' });
+  }
+  console.log('Graceful shutdown requested; current batch will checkpoint before exit.');
+};
 process.on('SIGINT', setStop);
 process.on('SIGTERM', setStop);
 
 function languageOf(track: { language: string }): 'en' | 'ja' { return track.language === 'ja' ? 'ja' : 'en'; }
+function refillKaggleQueue(force = false): void {
+  if (subtitleConfig.translationMode !== 'kaggle') return;
+  const now = Date.now();
+  if (!force && now - lastQueueRefillAt < subtitleConfig.queueRefillIntervalMs) return;
+  lastQueueRefillAt = now;
+  const requeued = requeueExpiredSubtitleSources(cap);
+  const depth = subtitleQueueDepth();
+  if (!shouldRefillSubtitleQueue(depth, subtitleConfig.queueRefillThreshold)) {
+    if (force) console.info({ event: 'kaggle_queue_refill_skipped', reason: 'backlog_above_low_watermark', queueDepth: depth, threshold: subtitleConfig.queueRefillThreshold, requeuedExpiredNoSource: requeued });
+    return;
+  }
+  const result = enqueueEligible({ animeIds: selectedAnime, cap });
+  console.info({ event: 'kaggle_queue_refilled', reason: force ? 'startup' : 'low_watermark', queueDepthBefore: depth, requeuedExpiredNoSource: requeued, threshold: subtitleConfig.queueRefillThreshold, ...result });
+}
 async function saveNativeTrack(job: Job, track: SubtitleTrack, text: string): Promise<void> {
   const parsed = parseSubtitle(text, track.format);
   const source = await saveBody(text, parsed.format);
@@ -28,44 +57,59 @@ async function saveNativeTrack(job: Job, track: SubtitleTrack, text: string): Pr
   logJob(job.id, 'info', 'provider_bulgarian_saved', { cues: parsed.cues.length, provider: track.provider });
 }
 async function discoverQueuedJob(job: Job): Promise<void> {
+  let lastHeartbeatErrorLog = 0;
+  const heartbeat = setInterval(() => {
+    try { heartbeatJob(job.id); }
+    catch (error) {
+      if (Date.now() - lastHeartbeatErrorLog >= 5 * 60_000) {
+        console.warn(JSON.stringify({ event: 'subtitle_job_lease_refresh_failed', jobId: job.id, reason: error instanceof Error ? error.message : String(error) }));
+        lastHeartbeatErrorLog = Date.now();
+      }
+    }
+  }, 15000);
+  heartbeat.unref();
   try {
     if (existingBulgarian(job.anime_id, Number(job.episode_id))) { updateJob(job.id, 'SKIPPED', { error: 'Validated Bulgarian subtitle already exists' }); return; }
-    const candidates = await resolveSubtitleSource(job.anime_id, Number(job.episode_id));
+    const discovery = await resolveSubtitleSourceDetailed(job.anime_id, Number(job.episode_id));
+    const candidates = discovery.candidates;
+    logJob(job.id, 'info', 'subtitle_discovery_finished', {
+      state: discovery.state, checkedProviders: discovery.checkedProviders, emptyProviders: discovery.emptyProviders,
+      primaryProvider: discovery.primaryProvider, primaryEmpty: discovery.primaryEmpty,
+      exhaustedAllProviders: discovery.exhaustedAllProviders, candidateCount: candidates.length, failureCount: discovery.errors.length,
+    });
+    for (const providerFailure of discovery.errors) logJob(job.id, 'warn', 'subtitle_provider_search_failed', providerFailure);
     const hardsub = candidates.find(candidate => candidate.kind === 'hardsub');
-    const tracks: SubtitleTrack[] = candidates.filter(candidate => candidate.kind === 'file' && candidate.url).map(candidate => ({ language: candidate.language ?? 'bg', url: candidate.url, format: candidate.format ?? 'srt', provider: candidate.sourceId, headers: {}, attribution: candidate.attribution, fetch: candidate.fetch }));
+    const tracks: SubtitleTrack[] = candidates.filter(candidate => candidate.kind === 'file' && (candidate.url || candidate.fetch)).map(candidate => ({ language: candidate.language ?? 'bg', url: candidate.url, format: candidate.format ?? 'srt', provider: candidate.sourceId, headers: {}, attribution: candidate.attribution, fetch: candidate.fetch }));
     if (hardsub) {
       saveSubtitleHardsub({ animeId: job.anime_id, episode: Number(job.episode_id), sourceId: hardsub.sourceId, sourceTitle: hardsub.title, sourceUrl: hardsub.url });
       logJob(job.id, 'info', 'hardsub_detected_no_ocr', { source: hardsub.sourceId, title: hardsub.title });
-      if (!tracks.some(track => track.language === 'bg')) {
+    }
+    let fileFailures = 0;
+    for (const bulgarian of tracks.filter(track => track.language === 'bg')) {
+      try { const result = await downloadTrack(bulgarian); parseSubtitle(result.text, result.track.format); await saveNativeTrack(job, bulgarian, result.text); return; }
+      catch (error) { fileFailures++; logJob(job.id, 'warn', 'bulgarian_track_unusable', { provider: bulgarian.provider, reason: error instanceof Error ? error.message : String(error) }); }
+    }
+    const selection = await firstUsableTrack(tracks, ['en', 'ja']);
+    for (const failure of selection.failures) { fileFailures++; logJob(job.id, 'warn', 'source_track_unusable', { ...failure }); }
+    let source = selection.track;
+    let storedSource: Awaited<ReturnType<typeof saveBody>> | undefined;
+    let parsedSource = selection.parsed;
+    const sourceText = selection.downloaded?.text ?? '';
+    if (source && parsedSource && selection.downloaded) storedSource = await saveBody(selection.downloaded.text, parsedSource.format);
+    if (!source || !storedSource || !parsedSource) {
+      if (subtitleDiscoveryNeedsRetry(discovery, fileFailures)) {
+        const failedProviders = discovery.errors.map(item => item.provider).join(',');
+        throw new Error(`Subtitle discovery incomplete${failedProviders ? `; provider failures: ${failedProviders}` : ''}; ${fileFailures} candidate file(s) unusable`);
+      }
+      if (hardsub) {
         updateJob(job.id, 'SKIPPED', { providerId: hardsub.sourceId, error: `Bulgarian hardsub available at ${hardsub.sourceId}; OCR is disabled` });
         return;
       }
-    }
-    for (const bulgarian of tracks.filter(track => track.language === 'bg')) {
-      try { const result = await downloadTrack(bulgarian); parseSubtitle(result.text, result.track.format); await saveNativeTrack(job, bulgarian, result.text); return; }
-      catch (error) { logJob(job.id, 'warn', 'bulgarian_track_unusable', { provider: bulgarian.provider, reason: error instanceof Error ? error.message : String(error) }); }
-    }
-    const sources = [...tracks.filter(track => track.language === 'en'), ...tracks.filter(track => track.language === 'ja')];
-    let source: SubtitleTrack | undefined;
-    let storedSource: Awaited<ReturnType<typeof saveBody>> | undefined;
-    let parsedSource: ReturnType<typeof parseSubtitle> | undefined;
-    let sourceText = '';
-    for (const candidate of sources) {
-      try {
-        const downloaded = await downloadTrack(candidate);
-        const parsed = parseSubtitle(downloaded.text, downloaded.track.format);
-        const stored = await saveBody(downloaded.text, parsed.format);
-        source = { ...candidate, format: parsed.format, fetch: undefined };
-        storedSource = stored; parsedSource = parsed; sourceText = downloaded.text;
-        break;
-      } catch (error) { logJob(job.id, 'warn', 'source_track_unusable', { provider: candidate.provider, language: candidate.language, reason: error instanceof Error ? error.message : String(error) }); }
-    }
-    if (!source || !storedSource || !parsedSource) {
       skipJobForNoSubtitleSource(job.id);
       return;
     }
     updateJob(job.id, 'QUEUED', { sourceLanguage: languageOf(source), providerId: source.provider, sourceHash: parsedSource.sourceHash, checkpoint: { ...job.checkpoint, sourcePath: storedSource.path, sourceHash: parsedSource.sourceHash, sourceLanguage: languageOf(source), sourceFormat: parsedSource.format, providerId: source.provider }, lockedAt: null });
-    logJob(job.id, 'info', 'tracks_discovered', { provider: source.provider, sourceLanguage: source.language, availableLanguages: [...new Set(tracks.map(track => track.language))], candidateCount: sources.length });
+    logJob(job.id, 'info', 'tracks_discovered', { provider: source.provider, sourceLanguage: source.language, availableLanguages: [...new Set(tracks.map(track => track.language))], candidateCount: tracks.filter(track => track.language === 'en' || track.language === 'ja').length });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     if (/^no subtitle source$/i.test(reason)) {
@@ -77,11 +121,20 @@ async function discoverQueuedJob(job: Job): Promise<void> {
     updateJob(job.id, 'FAILED', { error: reason, availableAt: terminal ? Number.MAX_SAFE_INTEGER : Date.now() + backoff, lockedAt: null });
     logJob(job.id, 'error', terminal ? 'discovery_dead_lettered' : 'discovery_failed', { reason, retryInMs: terminal ? 0 : backoff });
     if (terminal) addDeadLetter(latest, reason);
-  }
+  } finally { clearInterval(heartbeat); }
 }
 async function runJob(job: Job): Promise<void> {
   const current = getJob(job.id)!;
-  const heartbeat = setInterval(() => heartbeatJob(job.id), 15000);
+  let lastHeartbeatErrorLog = 0;
+  const heartbeat = setInterval(() => {
+    try { heartbeatJob(job.id); }
+    catch (error) {
+      if (Date.now() - lastHeartbeatErrorLog >= 5 * 60_000) {
+        console.warn(JSON.stringify({ event: 'subtitle_job_lease_refresh_failed', jobId: job.id, reason: error instanceof Error ? error.message : String(error) }));
+        lastHeartbeatErrorLog = Date.now();
+      }
+    }
+  }, 15000);
   heartbeat.unref();
   try {
     if (existingBulgarian(job.anime_id, Number(job.episode_id))) {
@@ -99,27 +152,28 @@ async function runJob(job: Job): Promise<void> {
       sourceBody = await readBody(sourcePath);
     } else {
       let tracks = Array.isArray(current.checkpoint.sourceTracks) ? current.checkpoint.sourceTracks as SubtitleTrack[] : [];
-      if (!tracks.length) tracks = await discoverTracks(job.anime_id, Number(job.episode_id));
+      let discoveryErrors: Array<{ provider: string; reason: string }> = [];
+      if (!tracks.length) {
+        const discovered = await discoverTracksDetailed(job.anime_id, Number(job.episode_id));
+        tracks = discovered.tracks;
+        discoveryErrors = discovered.discovery.errors;
+        for (const providerFailure of discoveryErrors) logJob(job.id, 'warn', 'subtitle_provider_search_failed', providerFailure);
+      }
       let nativeSaved = false;
       for (const bulgarian of tracks.filter(track => track.language === 'bg')) {
         try { const result = await downloadTrack(bulgarian); parseSubtitle(result.text, result.track.format); await saveNativeTrack(job, bulgarian, result.text); nativeSaved = true; break; }
         catch (error) { logJob(job.id, 'warn', 'bulgarian_track_unusable', { provider: bulgarian.provider, reason: error instanceof Error ? error.message : String(error) }); }
       }
       if (nativeSaved) return;
-      let selected: SubtitleTrack | undefined;
-      let downloaded: Awaited<ReturnType<typeof downloadTrack>> | undefined;
-      let parsed: ReturnType<typeof parseSubtitle> | undefined;
-      for (const language of ['en', 'ja'] as const) {
-        for (const candidate of tracks.filter(track => track.language === language)) {
-          try {
-            const result = await downloadTrack(candidate);
-            const normalized = parseSubtitle(result.text, result.track.format);
-            selected = candidate; downloaded = result; parsed = normalized; break;
-          } catch (error) { logJob(job.id, 'warn', 'source_track_unusable', { provider: candidate.provider, language, url: candidate.url, reason: error instanceof Error ? error.message : String(error) }); }
-        }
-        if (selected) break;
+      const selection = await firstUsableTrack(tracks, ['en', 'ja']);
+      for (const failure of selection.failures) logJob(job.id, 'warn', 'source_track_unusable', { ...failure });
+      const selected = selection.track;
+      const downloaded = selection.downloaded;
+      const parsed = selection.parsed;
+      if (!selected || !downloaded || !parsed) {
+        if (discoveryErrors.length) throw new Error(`Subtitle discovery incomplete; provider failures: ${discoveryErrors.map(item => item.provider).join(',')}`);
+        throw new Error('No usable English subtitle track and no usable Japanese fallback were available');
       }
-      if (!selected || !downloaded || !parsed) throw new Error('No usable English subtitle track and no usable Japanese fallback were available');
       sourceLanguage = languageOf(selected); providerId = selected.provider;
       updateJob(job.id, 'DOWNLOADING', { sourceLanguage, providerId, checkpoint: current.checkpoint, lockedAt: Date.now() });
       const stored = await saveBody(downloaded.text, parsed.format);
@@ -161,17 +215,23 @@ async function runJob(job: Job): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const pruned = pruneSubtitleOperationalData();
+  if (Object.values(pruned).some(count => count > 0)) console.info({ event: 'subtitle_operational_data_pruned', ...pruned });
   if (args.includes('--enqueue') || args.length === 0) console.log(`Queue result: ${JSON.stringify(enqueueEligible({ animeIds: selectedAnime, cap }))}`);
-  if (args.includes('--models')) { console.error('Local inference was removed from the subtitle worker; translations use configured online providers.'); process.exitCode = 2; return; }
   if (args.includes('--enqueue-only')) return;
   const recovered = recoverStaleJobs(subtitleConfig.staleLockMs);
   if (recovered) console.log(`Recovered ${recovered} stale jobs.`);
   if (workerControl() === 'paused') console.log('Worker is paused; resume it from /admin/subtitles or the admin API.');
   console.log(`Online subtitle worker active: maxConcurrency=${workerConcurrency()}, providers=${subtitleConfig.providerOrder.join(',')}, queueCap=${cap}`);
-  while (!stopping && workerControl() !== 'stopping') {
+  // In Kaggle mode this Pi process prepares sources and continuously keeps a bounded reservoir
+  // of work available; translation itself remains exclusively on authenticated Kaggle workers.
+  if (watch) refillKaggleQueue(true);
+  while (!stopping) {
     const newlyRecovered = recoverStaleJobs(subtitleConfig.staleLockMs);
     if (newlyRecovered) console.warn(`Recovered ${newlyRecovered} stale subtitle job(s).`);
-    if (workerControl() === 'paused') { await new Promise(resolve => setTimeout(resolve, 2000)); continue; }
+    const control = workerControl();
+    if (control === 'paused' || control === 'stopping') { await new Promise(resolve => setTimeout(resolve, 2000)); continue; }
+    refillKaggleQueue();
     const undiscovered = claimUndiscoveredJobs(workerConcurrency());
     if (undiscovered.length) { await Promise.all(undiscovered.map(discoverQueuedJob)); continue; }
     const jobs = claimJobs(workerConcurrency());
@@ -182,8 +242,14 @@ async function main(): Promise<void> {
     }
     await Promise.all(jobs.map(runJob));
   }
-  setWorkerControl('running');
   console.log('Worker stopped cleanly.');
 }
 
-main().catch(error => { console.error(error instanceof Error ? error.stack : error); process.exitCode = 1; }).finally(() => { clearInterval(workerHeartbeat); recordWorkerHeartbeat(0); process.exit(); });
+main().catch(error => { console.error(error instanceof Error ? error.stack : error); process.exitCode = 1; }).finally(() => {
+  clearInterval(workerHeartbeat);
+  if (controlAtShutdown === 'running') {
+    try { compareAndSetWorkerControl('stopping', 'running'); }
+    catch (error) { console.error({ event: 'subtitle_worker_shutdown_control_restore_failed', reason: error instanceof Error ? error.name : 'unknown' }); }
+  }
+  stopApplicationHeartbeat();
+});

@@ -111,7 +111,7 @@ export function providerStatus(): Array<Record<string, unknown>> {
       cooldownUntil: Math.max(healthy.cooldownUntil, state.cooldownUntil), cooldownRemainingMs: Math.max(0, Math.max(healthy.cooldownUntil, state.cooldownUntil) - Date.now()),
       attempts: state.attempts, successes: state.successes, failures: state.failures,
       successRate: state.attempts ? state.successes / state.attempts : null, lastLatencyMs: state.lastLatencyMs,
-      lastError: state.lastError ?? (provider.id === 'subtitlestranslator' ? 'UI stalled at 100% without translated output; disabled after live probe' : null), lastStatus: state.lastStatus, disabledThisRun: state.disabledThisRun,
+      lastError: state.lastError, lastStatus: state.lastStatus, disabledThisRun: state.disabledThisRun,
       accepts: provider.accepts, maxBytes: provider.maxBytes, maxCues: provider.maxCues,
     };
   });
@@ -359,16 +359,10 @@ const editsub: Provider = {
   },
   health: () => ({ ok: !providerState('editsub').disabledThisRun, cooldownUntil: providerState('editsub').cooldownUntil }),
 };
-const subtitlesTranslator: Provider = {
-  id: 'subtitlestranslator', kind: 'http', accepts: ['srt', 'vtt'], maxBytes: 1_048_576, maxCues: 40,
-  async translate() { throw new ProviderError(this.id, 'unavailable', 'browser UI upload worked, but translation stalled at 100% and emitted no translated result'); },
-  health: () => ({ ok: false, cooldownUntil: 0 }),
-};
 register(widgetProvider('translatesubtitles-co', 'https://translatesubtitles.co/'));
 register(widgetProvider('translate-subtitles-com', 'https://translate-subtitles.com/'));
 register(widgetProvider('syedgakbar', 'https://www.syedgakbar.com/'));
 register(editsub);
-register(subtitlesTranslator);
 
 export interface ProviderTranslateResult { providerId: string; srt: string; cacheHit: boolean; latencyMs: number; }
 export async function translateThroughProviders(input: { srt: string; sourceLang: string; targetLang: string }, options: {

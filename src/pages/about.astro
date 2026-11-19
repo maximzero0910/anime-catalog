@@ -1,5 +1,42 @@
 ---
 import '../styles/global.css';
 import Brand from '../components/Brand.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+import { canonicalUrl } from '../lib/seo';
 ---
-<html lang="bg"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="icon" href="/anineko-mark.svg" type="image/svg+xml"/><title>За сайта — Anineko</title></head><body><header class="site-header"><div class="shell header-row"><Brand /><nav class="site-nav"><a href="/">Каталог</a><a href="/dmca">DMCA</a></nav></div></header><main class="shell"><h1>За сайта / About</h1><div class="legal"><section lang="bg"><h2>Български</h2><p>Сайтът индексира заглавия и предоставя връзки към видеопотоци от външни източници. Сайтът не хоства файлове.</p><p>Всички права върху анимето, изображенията и свързаните материали принадлежат на съответните им притежатели.</p><p>Не е насочен към конкретна територия.</p><p>Контакт: <a href="mailto:contact@example.com">contact@example.com</a></p></section><section lang="en"><h2>English</h2><p>This site indexes titles and links to video streams from external sources. The site hosts no files.</p><p>All rights to anime, images, and related materials belong to their respective owners.</p><p>This site is not directed at any particular territory.</p><p>Contact: <a href="mailto:contact@example.com">contact@example.com</a></p></section></div></main></body></html>
+<html lang="bg">
+  <head>
+    <meta charset="utf-8"/><meta name="viewport" content="width=device-width"/>
+    <link rel="icon" href="/anineko-mark.svg" type="image/svg+xml"/>
+    <title>За Anineko — каталог за аниме</title>
+    <meta name="description" content="Как работи Anineko — некомерсиален фенски проект за аниме и български субтитри."/>
+    <meta name="robots" content="index,follow"/><link rel="canonical" href={canonicalUrl('/about/')}/>
+    <meta property="og:type" content="website"/><meta property="og:site_name" content="Anineko"/>
+    <meta property="og:title" content="За Anineko — каталог за аниме"/>
+    <meta property="og:description" content="Как работи Anineko — некомерсиален фенски проект за аниме и български субтитри."/>
+    <meta property="og:url" content={canonicalUrl('/about/')}/>
+  </head>
+  <body>
+    <header class="site-header"><div class="shell header-row"><Brand/><nav class="site-nav"><a href="/">Каталог</a><a href="/dmca/">Авторски права</a></nav></div></header>
+    <main class="shell legal-copy">
+      <h1>За сайта / About</h1>
+      <div class="legal">
+        <section lang="bg">
+          <h2>Български</h2>
+          <p>Anineko е некомерсиален, общностен хоби проект за каталогизиране и откриване на аниме. Сайтът не показва реклами и не предлага платени абонаменти.</p>
+          <p>Каталогът съдържа метаданни и връзки към видео източници от външни платформи. Някои източници се откриват чрез външни каталози или се предлагат от общността. Това не означава, че Anineko контролира тези платформи или че външното хостване само по себе си решава въпроса за правата.</p>
+          <p>Проектът създава и предоставя български преводи на субтитри. Част от преводите се изготвят с автоматизирана помощ и могат да съдържат неточности. В каталога може да има и субтитри с твърдо вграден текст във видеото.</p>
+          <p>Правата върху аниме, изображения, музика и други материали принадлежат на съответните им правоносители. За въпроси относно лични данни или сигнали за права: <a href="mailto:legal@anineko.eu">legal@anineko.eu</a>.</p>
+        </section>
+        <section lang="en">
+          <h2>English</h2>
+          <p>Anineko is a non-commercial, community-oriented hobby project for cataloguing and discovering anime. The site does not run advertisements or offer paid subscriptions.</p>
+          <p>The catalogue contains metadata and links to video sources on external platforms. Some sources are discovered through external catalogues or submitted by the community. This does not mean Anineko controls those platforms, or that external hosting by itself resolves questions of rights.</p>
+          <p>The project creates and provides Bulgarian subtitle translations. Some translations use automated assistance and may contain errors. The catalogue may also identify videos with hardcoded subtitles.</p>
+          <p>Rights in anime, images, music and other materials belong to their respective rights holders. For personal-data requests or rights reports, contact <a href="mailto:legal@anineko.eu">legal@anineko.eu</a>.</p>
+        </section>
+      </div>
+    </main>
+    <SiteFooter/>
+  </body>
+</html>

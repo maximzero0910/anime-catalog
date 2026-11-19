@@ -1,22 +1,29 @@
 import { getTitles } from '../../../lib/db';
 import { associateTelegramMessage, matchedTelegramEpisodes, rejectTelegramMatch, telegramAdminMessages, telegramStats, updateTelegramSyncState, upsertTelegramAlias } from '../../../lib/telegram/storage';
 import { matchTelegramMessage } from '../../../lib/telegram/matching';
+import { adminAuthorized, adminTokenConfigured } from '../../../lib/admin-auth';
+import { workerHeartbeats } from '../../../lib/worker-heartbeat';
+import { readJsonBody, RequestBodyError } from '../../../lib/request-body';
+import { telegramMediaPoolStatus } from '../../../lib/telegram/client';
 
 export const prerender = false;
-function authorized(request: Request): boolean {
-  const url = new URL(request.url); const host = url.hostname.toLowerCase();
-  const loopback = host === 'localhost' || host === '::1' || /^127(?:\.\d{1,3}){3}$/.test(host);
-  const origin = request.headers.get('origin');
-  return process.env.TELEGRAM_ADMIN_TOKEN ? request.headers.get('authorization') === `Bearer ${process.env.TELEGRAM_ADMIN_TOKEN}` : loopback && (!origin || origin === url.origin);
+
+function unauthorizedResponse(): Response {
+  const configured = adminTokenConfigured(process.env.TELEGRAM_ADMIN_TOKEN);
+  return Response.json(
+    { error: configured ? 'unauthorized' : 'Set TELEGRAM_ADMIN_TOKEN to enable administration' },
+    { status: configured ? 401 : 503, headers: { 'cache-control': 'no-store', ...(configured ? { 'WWW-Authenticate': 'Bearer realm="anineko-admin"' } : {}) } },
+  );
 }
 export async function GET({ request }: { request: Request }): Promise<Response> {
-  if (!authorized(request)) return Response.json({ error: process.env.TELEGRAM_ADMIN_TOKEN ? 'unauthorized' : 'local administration requires loopback access' }, { status: process.env.TELEGRAM_ADMIN_TOKEN ? 401 : 503 });
-  return Response.json({ status: telegramStats(), messages: telegramAdminMessages(), titles: getTitles().map(title => ({ id: title.id, name: title.english ?? title.romaji ?? title.native ?? String(title.id) })) }, { headers: { 'cache-control': 'no-store' } });
+  if (!adminAuthorized(request, process.env.TELEGRAM_ADMIN_TOKEN)) return unauthorizedResponse();
+  return Response.json({ status: telegramStats(), mediaPool: telegramMediaPoolStatus(), worker: workerHeartbeats().find(item => item.worker === 'telegram-sync') ?? null, messages: telegramAdminMessages(), titles: getTitles().map(title => ({ id: title.id, name: title.english ?? title.romaji ?? title.native ?? String(title.id) })) }, { headers: { 'cache-control': 'no-store' } });
 }
 export async function POST({ request }: { request: Request }): Promise<Response> {
-  if (!authorized(request)) return Response.json({ error: process.env.TELEGRAM_ADMIN_TOKEN ? 'unauthorized' : 'local administration requires loopback access' }, { status: process.env.TELEGRAM_ADMIN_TOKEN ? 401 : 503 });
+  if (!adminAuthorized(request, process.env.TELEGRAM_ADMIN_TOKEN)) return unauthorizedResponse();
   let body: Record<string, unknown>;
-  try { body = await request.json() as Record<string, unknown>; } catch { return Response.json({ error: 'invalid-json' }, { status: 400 }); }
+  try { body = await readJsonBody<Record<string, unknown>>(request, 64 * 1024); }
+  catch (error) { return Response.json({ error: error instanceof Error ? error.message : 'invalid-json' }, { status: error instanceof RequestBodyError ? error.status : 400 }); }
   try {
     if (body.action === 'sync') {
       if (!Boolean(telegramStats().connectionConfigured)) return Response.json({ error: 'Telegram credentials or channel are missing' }, { status: 503 });

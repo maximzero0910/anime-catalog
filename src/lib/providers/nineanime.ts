@@ -67,6 +67,43 @@ function cleanText(value: string): string {
   return decodeHtml(value.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
 }
 
+function normalizedTokens(value: string): string[] {
+  return value.normalize('NFKD').replace(/\p{M}/gu, '').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim().split(/\s+/).filter(Boolean);
+}
+
+export function relevantSearchHits<T extends SearchHit>(hits: T[], query: string): T[] {
+  const wanted = normalizedTokens(query);
+  if (!wanted.length) return hits;
+  if (wanted.length === 1 && wanted[0]!.length === 1) {
+    return hits.filter(hit => normalizedTokens([hit.title, ...(hit.alt ?? [])].join(' ')).some(token => token.startsWith(wanted[0]!)));
+  }
+  const relevant = hits.filter(hit => {
+    const available = normalizedTokens([hit.title, ...(hit.alt ?? [])].join(' '));
+    const counts = new Map<string, number>();
+    for (const token of available) counts.set(token, (counts.get(token) ?? 0) + 1);
+    return wanted.every(token => {
+      const count = counts.get(token) ?? 0;
+      if (!count) return false;
+      counts.set(token, count - 1);
+      return true;
+    });
+  });
+  return relevant;
+}
+
+export function extractSubtitleTracks(tracks: Array<{ file?: string; label?: string; lang?: string }>, base: string): StreamSource['subtitles'] {
+  return tracks.flatMap(track => {
+    if (!track.file) return [];
+    try {
+      const url = new URL(track.file, base);
+      if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username || url.password) return [];
+      const extension = url.pathname.split('.').at(-1)?.toLowerCase();
+      const format = extension === 'ass' || extension === 'srt' ? extension : 'vtt';
+      return [{ lang: track.lang ?? track.label ?? 'Unknown', url: url.href, format }];
+    } catch { return []; }
+  });
+}
+
 function modernServerItems(html: string, mode: AudioMode): Array<{ id: string; embed?: string }> {
   const result: Array<{ id: string; embed?: string }> = [];
   for (const [tag] of allMatches(html, /<[^>]+>/gi)) {
@@ -157,7 +194,7 @@ export const nineanime: Provider = {
       const title = cleanText(match[3]!);
       if (slug && title && !seen.has(slug)) { seen.add(slug); hits.push({ id: abs(BASE, `/anime/${slug}/`), title }); }
     }
-    return hits;
+    return relevantSearchHits(hits, q);
   },
   async listEpisodes(seriesId: string): Promise<EpisodeRef[]> {
     const seriesUrl = abs(BASE, seriesId);
@@ -216,15 +253,17 @@ export const nineanime: Provider = {
       try {
         const embed = await httpGet(embedUrl, { provider: id, referer: episodeUrl });
         const candidates = urlsIn(embed.text);
+        const subtitleTracksByUrl = new Map<string, StreamSource['subtitles']>();
         const mediaId = firstMatch(embed.text, [/id=["']megaplay-player["'][^>]*data-id=["']([^"']+)/i]);
         if (mediaId && new URL(embedUrl).hostname.endsWith('megaplay.buzz')) {
           const apiUrl = `${new URL(embedUrl).origin}/stream/getSources?id=${encodeURIComponent(mediaId)}&platform=OTHER&st=other`;
           const result = await httpGet(apiUrl, { provider: id, referer: embedUrl });
           try {
-            const payload = JSON.parse(result.text) as { enc?: string; sources?: unknown; tracks?: Array<{ file?: string; label?: string }> };
+            const payload = JSON.parse(result.text) as { enc?: string; sources?: unknown; tracks?: Array<{ file?: string; label?: string; lang?: string }> };
+            const subtitles = extractSubtitleTracks(payload.tracks ?? [], embedUrl);
             if (payload.enc) {
               const decoded = decryptMegaSources(payload.enc);
-              if (decoded) candidates.push(decoded.file);
+              if (decoded) { candidates.push(decoded.file); subtitleTracksByUrl.set(decoded.file, subtitles); }
             }
             candidates.push(...urlsIn(payload.sources));
           } catch { /* Continue with source URLs embedded in the page itself. */ }
@@ -237,7 +276,7 @@ export const nineanime: Provider = {
           if (!/\.m3u8(?:$|\?)/i.test(url)) continue;
           const sourceHeaders = { referer: new URL(embedUrl).origin + '/' };
           if (!await verifyPlaylist(url, sourceHeaders)) continue;
-          streams.push({ url, quality: qualityFrom(url), type: 'hls', headers: sourceHeaders, subtitles: [], audio: mode, provider: id });
+          streams.push({ url, quality: qualityFrom(url), type: 'hls', headers: sourceHeaders, subtitles: subtitleTracksByUrl.get(candidate) ?? [], audio: mode, provider: id });
         }
       } catch { /* Continue through alternate server entries. */ }
     }

@@ -1,5 +1,7 @@
 import { clearTelegramMediaFailure, getPlayableTelegramMessage, recordTelegramMediaFailure } from '../../../../lib/telegram/storage';
 import { telegramVideoRange } from '../../../../lib/telegram/client';
+import { ClientPoolError } from '../../../../lib/telegram/client-pool';
+import { TelegramOperationError } from '../../../../lib/telegram/deadline';
 import { parseTelegramByteRange } from '../../../../lib/telegram/range';
 
 export const prerender = false;
@@ -19,11 +21,12 @@ async function serve(messageId: number, request: Request, head = false): Promise
   if (range) baseHeaders.set('Content-Range', `bytes ${start}-${end}/${size}`);
   if (head) return new Response(null, { status: range ? 206 : 200, headers: baseHeaders });
 
-  let iterator = await telegramVideoRange(messageId, start, end);
+  let iterator = await telegramVideoRange(messageId, start, end, false, request.signal);
   let first: IteratorResult<Uint8Array>;
   try { first = await iterator[Symbol.asyncIterator]().next(); if (first.done) throw new Error('Telegram returned no media data'); }
-  catch {
-    iterator = await telegramVideoRange(messageId, start, end, true);
+  catch (error) {
+    if (error instanceof ClientPoolError || (error instanceof TelegramOperationError && error.kind === 'timeout') || request.signal.aborted) throw error;
+    iterator = await telegramVideoRange(messageId, start, end, true, request.signal);
     first = await iterator[Symbol.asyncIterator]().next();
     if (first.done) throw new Error('Telegram returned no media data after refreshing the file reference');
   }
@@ -54,7 +57,14 @@ export async function GET({ params, request }: { params: { messageId?: string };
   const messageId = Number(params.messageId);
   if (!Number.isSafeInteger(messageId) || messageId < 1) return Response.json({ error: 'invalid-message-id' }, { status: 400 });
   try { return await serve(messageId, request); }
-  catch (error) { const reason = error instanceof Error ? error.message : String(error); recordTelegramMediaFailure(messageId, reason); console.error({ provider: 'telegram', ep: messageId, reason }); return Response.json({ error: 'telegram-media-unavailable' }, { status: 502 }); }
+  catch (error) {
+    if (error instanceof ClientPoolError) return Response.json({ error: 'telegram-media-busy' }, { status: error.kind === 'cancelled' ? 499 : 503, headers: { 'retry-after': '3', 'cache-control': 'no-store' } });
+    if (request.signal.aborted) return new Response(null, { status: 499 });
+    const reason = error instanceof Error ? error.message : String(error);
+    recordTelegramMediaFailure(messageId, reason);
+    console.error({ provider: 'telegram', ep: messageId, reason });
+    return Response.json({ error: 'telegram-media-unavailable' }, { status: 502 });
+  }
 }
 export async function HEAD({ params, request }: { params: { messageId?: string }; request: Request }): Promise<Response> {
   const messageId = Number(params.messageId);

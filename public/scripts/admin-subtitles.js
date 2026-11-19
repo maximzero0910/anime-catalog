@@ -29,7 +29,7 @@
         ['Куи/час (активно)', data.activeCuesPerHour], ['Преведени куи (активно)', data.activeTranslatedCues],
         ['Текущ епизод оставащи (часа)', data.activeEpisodeRemainingSeconds === null ? null : data.activeEpisodeRemainingSeconds / 3600],
         ['Средно време (сек.)', data.meanTranslationSeconds], ['Оставащи часове', data.estimatedRemainingSeconds === null ? null : data.estimatedRemainingSeconds / 3600],
-        ['RAM използвана (%)', data.resources.memoryUsedPercent], ['Worker процес', data.worker], ['Worker контрол', data.workerControl], ['Преводач', 'Онлайн сайтове'],
+        ['RAM използвана (%)', data.resources.memoryUsedPercent], ['Диск използван (%)', data.resources.storage?.usedPercent ?? 'неизвестно'], ['Свободен диск', data.resources.storage ? `${fmt(data.resources.storage.availableBytes / (1024 ** 3))} GiB` : 'неизвестно'], ['Worker процес', data.worker], ['Worker контрол', data.workerControl], ['Преводач', 'Онлайн сайтове'],
         ['Индекс: заглавия', data.subtitleIndex.titles], ['Всички индексни записи', data.subtitleIndex.entries],
         ['Готови за пускане', data.subtitleIndex.playableRows], ['Само каталожни', data.subtitleIndex.catalogOnlyRows],
         ['Проверени записи', data.subtitleIndex.verifiedRows], ['Готови BG файла', data.subtitleIndex.assets],

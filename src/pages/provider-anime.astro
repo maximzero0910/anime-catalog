@@ -1,11 +1,12 @@
 ---
 import '../styles/global.css';
 import Brand from '../components/Brand.astro';
+import SiteFooter from '../components/SiteFooter.astro';
 ---
 <html lang="bg">
   <head>
     <meta charset="utf-8"/><meta name="viewport" content="width=device-width"/>
-    <link rel="icon" href="/anineko-mark.svg" type="image/svg+xml"/><title>Избери епизод — Anineko</title>
+    <link rel="icon" href="/anineko-mark.svg" type="image/svg+xml"/><meta name="robots" content="noindex,nofollow"/><title>Избери епизод — Anineko</title>
   </head>
   <body>
     <header class="site-header">
@@ -22,7 +23,7 @@ import Brand from '../components/Brand.astro';
         <div class="episodes provider-episodes" data-episode-list aria-live="polite"><p class="search-message">Зареждане на епизодите…</p></div>
       </section>
     </main>
-    <footer class="footer"><div class="shell"><a href="/#search">Към търсенето</a> · Български субтитри, когато са налични.</div></footer>
+    <SiteFooter/>
   </body>
 </html>
 
@@ -104,11 +105,9 @@ import Brand from '../components/Brand.astro';
         const subheading = document.createElement('p'); subheading.textContent = `Епизод ${episode.number}`;
         info.append(heading, subheading);
         const actions = document.createElement('div'); actions.className = 'provider-episode-actions';
-        if (provider === 'anikoto') {
-          const watchParams = new URLSearchParams({ provider, animeId: seriesId, episodeId: episode.id, number: String(episode.number), title, ...(anilistId ? { anilistId } : {}) });
-          const watch = document.createElement('a'); watch.className = 'button-primary provider-watch-button'; watch.href = `/provider-watch?${watchParams}`; watch.textContent = 'Гледай';
-          actions.append(watch);
-        }
+        const watchParams = new URLSearchParams({ provider, animeId: seriesId, episodeId: episode.id, number: String(episode.number), title, ...(anilistId ? { anilistId } : {}) });
+        const watch = document.createElement('a'); watch.className = 'button-primary provider-watch-button'; watch.href = `/provider-watch?${watchParams}`; watch.textContent = 'Гледай';
+        actions.append(watch);
         const sourceButton = document.createElement('button'); sourceButton.className = 'episode-source-button'; sourceButton.type = 'button'; sourceButton.textContent = 'Източници';
         const sourceInfo = document.createElement('span'); sourceInfo.className = 'source-info';
         showSource(episode.id, sourceButton, sourceInfo);

@@ -1,0 +1,44 @@
+[Unit]
+Description=Anineko Telegram channel synchronizer
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/srv/anineko
+StartLimitIntervalSec=10min
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=anineko
+Group=anineko
+WorkingDirectory=/opt/anineko/current
+EnvironmentFile=/etc/anineko/anineko.env
+Environment=NODE_OPTIONS=--max-old-space-size=512
+ExecStart=/usr/bin/node --import tsx tools/telegram-sync.ts --watch
+Restart=on-failure
+RestartSec=15s
+TimeoutStartSec=60s
+TimeoutStopSec=60s
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/srv/anineko
+MemoryHigh=512M
+MemoryMax=768M
+CPUQuota=100%
+TasksMax=96
+LimitNOFILE=2048
+
+[Install]
+WantedBy=multi-user.target

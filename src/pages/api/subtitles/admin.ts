@@ -1,38 +1,53 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
+import { statfs } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { freemem, cpus, totalmem } from 'node:os';
 import { getEpisodes, getTitles } from '../../../lib/db';
 import { enqueueEligible } from '../../../lib/subtitles/queue';
 import { addSubtitleTitleAlias, controlJob, deadLetters, getGlossary, jobStats, markSubtitleIndexRejected, markSubtitleIndexVerified, pendingSubtitleMappings, recentJobs, resolveSubtitleMapping, retryFailedJobs, setGlossary, setWorkerConcurrency, setWorkerControl, storedBulgarianCount, subtitleIndexProviderBreakdown, subtitleIndexReviewQueue, subtitleIndexStats, workerConcurrency, workerControl, workerProcessStatus } from '../../../lib/subtitles/storage';
 import { subtitleConfig } from '../../../lib/subtitles/config';
+import { adminAuthorized, adminTokenConfigured } from '../../../lib/admin-auth';
+import { workerHeartbeats } from '../../../lib/worker-heartbeat';
+import { readJsonBody, RequestBodyError } from '../../../lib/request-body';
+import { resourceLimitSnapshot } from '../../../lib/resource-limits';
+import { createCachedProbe } from '../../../lib/cached-probe';
+import { catalogDatabasePath } from '../../../lib/catalog-path';
 
 export const prerender = false;
 const execFile = promisify(execFileCallback);
 
+const gpuProbe = createCachedProbe(async () => {
+  const { stdout } = await execFile('nvidia-smi', ['--query-gpu=name,memory.total,memory.used,utilization.gpu', '--format=csv,noheader,nounits'], { timeout: 1800 });
+  const [name, total, used, utilization] = stdout.trim().split(',').map(value => value.trim());
+  return name ? { name, vramTotalMiB: Number(total), vramUsedMiB: Number(used), utilizationPercent: Number(utilization) } : null;
+}, { ttlMs: 60_000 });
+
 async function resourceStats(): Promise<Record<string, unknown>> {
   const memoryTotal = totalmem(); const memoryFree = freemem();
-  let gpu: Record<string, unknown> | null = null;
+  const gpu = await gpuProbe();
+  let storage: { totalBytes: number; availableBytes: number; usedPercent: number } | null = null;
   try {
-    const { stdout } = await execFile('nvidia-smi', ['--query-gpu=name,memory.total,memory.used,utilization.gpu', '--format=csv,noheader,nounits'], { timeout: 1800 });
-    const [name, total, used, utilization] = stdout.trim().split(',').map(value => value.trim());
-    if (name) gpu = { name, vramTotalMiB: Number(total), vramUsedMiB: Number(used), utilizationPercent: Number(utilization) };
-  } catch { /* CPU-only installations and restricted hosts expose no NVIDIA telemetry. */ }
-  return { cpuCount: cpus().length, loadAverage: (await import('node:os')).loadavg(), memoryTotalBytes: memoryTotal, memoryFreeBytes: memoryFree, memoryUsedPercent: Math.round((memoryTotal - memoryFree) / memoryTotal * 100), gpu };
+    const filesystem = await statfs(dirname(catalogDatabasePath()));
+    const totalBytes = Number(filesystem.blocks) * Number(filesystem.bsize);
+    const availableBytes = Number(filesystem.bavail) * Number(filesystem.bsize);
+    if (Number.isFinite(totalBytes) && totalBytes > 0 && Number.isFinite(availableBytes) && availableBytes >= 0) {
+      storage = { totalBytes, availableBytes, usedPercent: Math.round((totalBytes - availableBytes) / totalBytes * 100) };
+    }
+  } catch { /* Read-only or restricted filesystems may not expose statfs; omit the optional metric. */ }
+  return { cpuCount: cpus().length, loadAverage: (await import('node:os')).loadavg(), memoryTotalBytes: memoryTotal, memoryFreeBytes: memoryFree, memoryUsedPercent: Math.round((memoryTotal - memoryFree) / memoryTotal * 100), storage, gpu };
 }
 
-function localAdminRequest(request: Request): boolean {
-  const url = new URL(request.url);
-  const hostname = url.hostname.toLowerCase();
-  const loopback = hostname === 'localhost' || hostname === '::1' || /^127(?:\.\d{1,3}){3}$/.test(hostname);
-  const origin = request.headers.get('origin');
-  return loopback && (!origin || origin === url.origin);
-}
-function requireAdmin(request: Request): boolean {
-  const expected = process.env.SUBTITLE_ADMIN_TOKEN;
-  return Boolean((expected && request.headers.get('authorization') === `Bearer ${expected}`) || (!expected && localAdminRequest(request)));
+function unauthorizedResponse(): Response {
+  const configured = adminTokenConfigured(process.env.SUBTITLE_ADMIN_TOKEN);
+  return Response.json(
+    { error: configured ? 'unauthorized' : 'Set SUBTITLE_ADMIN_TOKEN to enable administration' },
+    { status: configured ? 401 : 503, headers: { 'cache-control': 'no-store', ...(configured ? { 'WWW-Authenticate': 'Bearer realm="anineko-admin"' } : {}) } },
+  );
 }
 
 export async function GET({ request }: { request: Request }): Promise<Response> {
+  if (!adminAuthorized(request, process.env.SUBTITLE_ADMIN_TOKEN)) return unauthorizedResponse();
   const titles = getTitles();
   const eligible = titles.reduce((sum, title) => sum + getEpisodes(title.id).length, 0);
   const stats = jobStats();
@@ -53,12 +68,13 @@ export async function GET({ request }: { request: Request }): Promise<Response> 
     activeEpisodeRemainingSeconds: stats.activeEpisodeRemainingSeconds,
     estimatedRemainingSeconds: typeof stats.meanSeconds === 'number' ? stats.meanSeconds * ((counts.QUEUED ?? 0) + (counts.DISCOVERED ?? 0) + (counts.DOWNLOADING ?? 0) + (counts.NORMALIZING ?? 0) + (counts.TRANSLATING ?? 0) + (counts.VALIDATING ?? 0)) / workerConcurrency() : null,
     worker: workerProcessStatus(), workerControl: workerControl(), concurrency: workerConcurrency(), configuredConcurrency: subtitleConfig.maxConcurrentJobs,
-    deadLetters: deadLetters(20), jobs: recentJobs(40), resources: await resourceStats(),
+    backgroundWorkers: workerHeartbeats(),
+    deadLetters: deadLetters(20), jobs: recentJobs(40), resources: await resourceStats(), resourceLimits: resourceLimitSnapshot(),
     subtitleIndex: subtitleIndexStats(),
     subtitleIndexProviders: subtitleIndexProviderBreakdown(),
     subtitleIndexReview: subtitleIndexReviewQueue(100),
     needsMapping: pendingSubtitleMappings(100),
-    adminControlsEnabled: Boolean(process.env.SUBTITLE_ADMIN_TOKEN) || localAdminRequest(request),
+    adminControlsEnabled: adminTokenConfigured(process.env.SUBTITLE_ADMIN_TOKEN),
     titles: titles.map(title => ({ id: title.id, name: title.english ?? title.romaji ?? `AniList ${title.id}` })),
     glossary: Number.isSafeInteger(requestedAnime) && requestedAnime > 0 ? getGlossary(requestedAnime) : [],
   };
@@ -66,9 +82,10 @@ export async function GET({ request }: { request: Request }): Promise<Response> 
 }
 
 export async function POST({ request }: { request: Request }): Promise<Response> {
-  if (!requireAdmin(request)) return Response.json({ error: process.env.SUBTITLE_ADMIN_TOKEN ? 'unauthorized' : 'Set SUBTITLE_ADMIN_TOKEN to enable administration, or use the dashboard on loopback' }, { status: process.env.SUBTITLE_ADMIN_TOKEN ? 401 : 503 });
+  if (!adminAuthorized(request, process.env.SUBTITLE_ADMIN_TOKEN)) return unauthorizedResponse();
   let body: Record<string, unknown>;
-  try { body = await request.json() as Record<string, unknown>; } catch { return Response.json({ error: 'invalid-json' }, { status: 400 }); }
+  try { body = await readJsonBody<Record<string, unknown>>(request, 256 * 1024); }
+  catch (error) { return Response.json({ error: error instanceof Error ? error.message : 'invalid-json' }, { status: error instanceof RequestBodyError ? error.status : 400 }); }
   const action = body.action;
   if (action === 'pause') setWorkerControl('paused');
   else if (action === 'resume') setWorkerControl('running');

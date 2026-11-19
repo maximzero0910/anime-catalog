@@ -1,12 +1,18 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
-import { ordered, translateThroughProviders, translateWithProvider, type Provider } from '../providers';
+import { ordered, translationProviders, translateThroughProviders, translateWithProvider, type Provider } from '../providers';
 import { formatTime, parseSubtitle } from '../normalize';
 
 const fixture = await readFile('tests/fixtures/sample-en.srt', 'utf8');
 const expected = parseSubtitle(fixture, 'srt');
 const liveProviders = ['translate-subtitles-com', 'translatesubtitles-co', 'syedgakbar', 'editsub'];
+
+test('translation registry contains only the four completed online providers', () => {
+  assert.deepEqual([...translationProviders.keys()].sort(), [...liveProviders].sort());
+  assert.ok(ordered().length > 0);
+  assert.ok(ordered().every(provider => liveProviders.includes(provider.id)));
+});
 
 for (const id of liveProviders) {
   test(`live ${id} translation preserves cue parity and returns Bulgarian`, async () => {
@@ -28,13 +34,6 @@ for (const id of liveProviders) {
     }
   });
 }
-
-test('subtitlestranslator remains disabled after the UI completed without translated output', async () => {
-  const provider = ordered().find(candidate => candidate.id === 'subtitlestranslator');
-  assert.ok(provider);
-  assert.equal(provider.health().ok, false);
-  await assert.rejects(translateWithProvider(provider, fixture, 'en', 'bg', new AbortController().signal), /stalled at 100%/);
-});
 
 test('VTT input is uploaded as SRT and returned with a WEBVTT header and unchanged times', async () => {
   const provider = ordered().find(candidate => candidate.id === 'translatesubtitles-co');

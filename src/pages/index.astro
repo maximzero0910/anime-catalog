@@ -3,8 +3,10 @@ import '../styles/global.css';
 import TitleCard from '../components/TitleCard.astro';
 import Brand from '../components/Brand.astro';
 import Search from '../components/Search.astro';
+import SiteFooter from '../components/SiteFooter.astro';
 import { getTitles, getBulgarianCoverage } from '../lib/db';
-const titles = getTitles().slice(0, 30);
+import { canonicalUrl } from '../lib/seo';
+const titles = getTitles();
 const spotlightTitles = titles.filter(title => title.banner || title.cover).slice(0, 6);
 const genreSections = [
   { key: 'romcom', title: 'Rom-com', kicker: 'РОМАНТИКА С КОМЕДИЯ', test: (title: typeof titles[number]) => title.genres.includes('Romance') && title.genres.includes('Comedy') },
@@ -17,6 +19,15 @@ const genreSections = [
   <head>
     <meta charset="utf-8"/><meta name="viewport" content="width=device-width"/>
     <meta name="description" content="Anineko — откривай аниме заглавия, видео източници и български субтитри."/>
+    <meta name="robots" content="index,follow"/>
+    <link rel="canonical" href={canonicalUrl('/')} />
+    <meta property="og:type" content="website"/>
+    <meta property="og:site_name" content="Anineko"/>
+    <meta property="og:title" content="Anineko — открий аниме"/>
+    <meta property="og:description" content="Откривай аниме заглавия, видео източници и български субтитри."/>
+    <meta property="og:url" content={canonicalUrl('/')} />
+    <meta property="og:image" content={canonicalUrl('/anineko-mark.svg')} />
+    <meta property="og:locale" content="bg_BG"/>
     <link rel="icon" href="/anineko-mark.svg" type="image/svg+xml"/>
     <title>Anineko — открий аниме</title>
   </head>
@@ -35,7 +46,7 @@ const genreSections = [
           const name = title.title_bg ?? title.english ?? title.romaji ?? title.native ?? `Anime ${title.id}`;
           const bg = getBulgarianCoverage(title.id);
           return <a class:list={['spotlight-tile', { 'spotlight-large': index === 0 }]} href={`/anime/${title.slug}`} style={`--tile-image:url('${title.banner ?? title.cover}')`} aria-label={`Разгледай ${name}`}>
-            <span class="spotlight-image" aria-hidden="true"></span><span class="spotlight-copy"><span class="spotlight-kicker">{title.format ?? 'АНИМЕ'}{title.year ? ` · ${title.year}` : ''}</span><span class="spotlight-name">{name}</span><span class="spotlight-meta">{title.score ? `★ ${title.score.toFixed(1)}` : 'Разгледай заглавието'}{bg.available > 0 ? ` · BG ${bg.complete ? 'пълно' : `${bg.available}/${bg.total}`}` : ''}</span></span>
+            <span class="spotlight-image" aria-hidden="true"></span><span class="spotlight-copy"><span class="spotlight-kicker">{title.format ?? 'АНИМЕ'}{title.year ? ` · ${title.year}` : ''}</span><span class="spotlight-name">{name}</span><span class="spotlight-meta">{title.score ? `★ ${title.score.toFixed(1)}` : 'Разгледай заглавието'}</span><span class:list={['bg-coverage-badge', 'spotlight-bg-badge', { complete: bg.complete }]} data-bg-coverage-badge data-anime-id={title.id} title={`${bg.available} от ${bg.total} епизода имат български субтитри`} hidden={bg.available === 0}>BG · {bg.complete ? 'ПЪЛНО' : 'ЧАСТИЧНО'}</span></span>
           </a>;
         })}</div>
       </section>
@@ -54,20 +65,23 @@ const genreSections = [
           <button type="button" class="catalog-filter" data-catalog-filter="fantasy" aria-pressed="false">Фентъзи</button>
           <button type="button" class="catalog-filter" data-catalog-filter="scifi" aria-pressed="false">Sci-Fi</button>
           <button type="button" class="catalog-filter" data-catalog-filter="drama" aria-pressed="false">Драма</button>
+          <button type="button" class="catalog-filter" data-catalog-filter="bulgarian" aria-pressed="false">Български субтитри</button>
           <span class="catalog-filter-count" data-filter-count aria-live="polite">{titles.length} заглавия</span>
         </div>
         <div class="grid catalog-grid" id="catalog-grid">{titles.map(title => <TitleCard title={title} />)}</div>
       </section>
     </main>
-    <footer class="footer"><div class="shell"><a href="/about">За проекта</a> · <a href="/dmca">DMCA</a><span> · Български субтитри, когато са налични.</span></div></footer>
+    <SiteFooter/>
   </body>
   <script>
     const filterButtons = [...document.querySelectorAll<HTMLButtonElement>('[data-catalog-filter]')];
     const catalogCards = [...document.querySelectorAll<HTMLElement>('#catalog-grid [data-catalog-card]')];
     const count = document.querySelector<HTMLElement>('[data-filter-count]');
+    let activeFilter = 'all';
     const matches = (card: HTMLElement, filter: string) => {
       const genres = JSON.parse(card.dataset.genres ?? '[]') as string[];
       const tags = JSON.parse(card.dataset.tags ?? '[]') as string[];
+      if (filter === 'bulgarian') return card.querySelector<HTMLElement>('[data-bg-coverage-badge]')?.hidden === false;
       if (filter === 'romcom') return genres.includes('Romance') && genres.includes('Comedy');
       if (filter === 'shonen') return tags.some(tag => tag.toLowerCase() === 'shounen');
       if (filter === 'action') return genres.includes('Action');
@@ -77,6 +91,7 @@ const genreSections = [
       return true;
     };
     const selectFilter = (filter: string) => {
+      activeFilter = filter;
       let visible = 0;
       for (const card of catalogCards) {
         card.hidden = !matches(card, filter);
@@ -91,5 +106,12 @@ const genreSections = [
     };
     for (const button of filterButtons) button.addEventListener('click', () => selectFilter(button.dataset.catalogFilter ?? 'all'));
     for (const link of document.querySelectorAll<HTMLAnchorElement>('[data-select-filter]')) link.addEventListener('click', () => selectFilter(link.dataset.selectFilter ?? 'all'));
+    document.addEventListener('anineko:bg-coverage-updated', () => {
+      if (activeFilter === 'bulgarian') selectFilter(activeFilter);
+    });
+  </script>
+  <script>
+    import { refreshBulgarianCoverage } from '../lib/bg-coverage-client';
+    void refreshBulgarianCoverage();
   </script>
 </html>

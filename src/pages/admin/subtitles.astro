@@ -1,6 +1,7 @@
 ---
 import '../../styles/global.css';
 import Brand from '../../components/Brand.astro';
+import SiteFooter from '../../components/SiteFooter.astro';
 ---
 <html lang="bg">
   <head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><link rel="icon" href="/anineko-mark.svg" type="image/svg+xml"/><meta name="robots" content="noindex,nofollow"/><title>Субтитри — Anineko</title></head>
@@ -25,5 +26,6 @@ import Brand from '../../components/Brand.astro';
       .subtitle-admin{padding-block:3rem 5rem}.subtitle-admin h1{margin:.2rem 0 1rem}.subtitle-admin section{margin-top:2rem}.subtitle-admin h2{font-size:1.2rem}.admin-auth,.admin-controls{display:flex;align-items:end;gap:.7rem;flex-wrap:wrap;margin:1.25rem 0}.admin-auth label,.admin-controls label{display:grid;gap:.3rem;color:var(--muted,#9ca3af);font-size:.85rem}.subtitle-admin input,.subtitle-admin button{min-height:2.5rem;border:1px solid #38404e;border-radius:.55rem;background:#121722;color:inherit;padding:.45rem .75rem}.subtitle-admin button{cursor:pointer;background:#202938;transition:background .18s,border-color .18s}.subtitle-admin button:hover{background:#2b394d;border-color:#77849a}.subtitle-admin button:focus-visible,.subtitle-admin input:focus-visible{outline:2px solid #f1c75b;outline-offset:2px}.subtitle-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:.7rem}.metric{padding:1rem;border:1px solid #2a3341;border-radius:.7rem;background:#10151e}.metric strong{display:block;font-size:1.35rem}.metric span{color:var(--muted,#9ca3af);font-size:.85rem}.table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;min-width:630px}th,td{text-align:left;padding:.7rem;border-bottom:1px solid #29313e}th{color:#aab4c4;font-size:.8rem}td button{margin-right:.35rem}.subtitle-admin code{color:#f1c75b}@media(max-width:600px){.subtitle-admin{padding-top:2rem}.admin-auth>*{width:100%}.admin-controls button,.admin-controls label{flex:1 1 42%}}
     </style>
     <script is:inline src="/scripts/admin-subtitles.js"></script>
+    <SiteFooter/>
   </body>
 </html>

@@ -2,6 +2,7 @@ import { defineConfig } from 'astro/config';
 import node from '@astrojs/node';
 
 export default defineConfig({
+  site: 'https://anineko.eu',
   output: 'static',
   adapter: node({ mode: 'standalone' }),
   vite: {

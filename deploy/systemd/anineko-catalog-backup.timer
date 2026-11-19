@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Anineko catalog backup daily
+
+[Timer]
+OnCalendar=*-*-* 03:20:00
+Persistent=true
+RandomizedDelaySec=15min
+AccuracySec=5min
+Unit=anineko-catalog-backup.service
+
+[Install]
+WantedBy=timers.target

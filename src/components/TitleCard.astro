@@ -8,6 +8,6 @@ const bg = getBulgarianCoverage(title.id);
 <article class="card" data-catalog-card data-genres={JSON.stringify(title.genres)} data-tags={JSON.stringify(title.tags)}>
   <a href={`/anime/${title.slug}`} aria-label={`Информация за ${name}`}>
     <div class="card-art">{title.cover && <img src={title.cover} alt={`Постер на ${name}`} loading="lazy" width="460" height="650" />}</div>
-    <div class="card-body"><div class="card-title-row"><h2>{name}</h2>{bg.available > 0 && <span class:list={['bg-coverage-badge', { complete: bg.complete }]} title={`${bg.available} от ${bg.total} епизода имат български субтитри`}>BG · {bg.complete ? 'ПЪЛНО' : 'ЧАСТИЧНО'}</span>}</div><p class="card-meta">{title.year ?? '—'} · {title.format ?? 'Аниме'}{title.score ? <> · <span class="card-score">★ {title.score.toFixed(1)}</span></> : null}</p></div>
+    <div class="card-body"><div class="card-title-row"><h2>{name}</h2><span class:list={['bg-coverage-badge', { complete: bg.complete }]} data-bg-coverage-badge data-anime-id={title.id} title={`${bg.available} от ${bg.total} епизода имат български субтитри`} hidden={bg.available === 0}>BG · {bg.complete ? 'ПЪЛНО' : 'ЧАСТИЧНО'}</span></div><p class="card-meta">{title.year ?? '—'} · {title.format ?? 'Аниме'}{title.score ? <> · <span class="card-score">★ {title.score.toFixed(1)}</span></> : null}</p></div>
   </a>
 </article>

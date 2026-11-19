@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily Anineko AniList ranking refresh
+
+[Timer]
+OnCalendar=*-*-* 04:35:00
+Persistent=true
+RandomizedDelaySec=15min
+AccuracySec=5min
+Unit=anineko-anilist-sync.service
+
+[Install]
+WantedBy=timers.target

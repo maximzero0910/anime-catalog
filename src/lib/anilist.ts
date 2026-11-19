@@ -1,4 +1,5 @@
 const endpoint = 'https://graphql.anilist.co';
+import { withResourceLimit } from './resource-limits';
 export interface AniListAnime {
   id: number;
   episodes: number | null;
@@ -12,10 +13,12 @@ const ANIME_CACHE_TTL_MS = 15 * 60_000;
 const ANIME_CACHE_LIMIT = 512;
 
 export async function queryAniList<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
-  const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ query, variables }), signal: AbortSignal.timeout(8_000) });
-  if (!response.ok) throw new Error(`AniList GraphQL returned ${response.status}`);
-  const result = await response.json() as { data: T };
-  return result.data;
+  return withResourceLimit('metadata', async () => {
+    const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ query, variables }), signal: AbortSignal.timeout(8_000) });
+    if (!response.ok) throw new Error(`AniList GraphQL returned ${response.status}`);
+    const result = await response.json() as { data: T };
+    return result.data;
+  });
 }
 
 export async function getAniListAnime(id: number): Promise<AniListAnime | null> {
